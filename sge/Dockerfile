@@ -2,9 +2,9 @@
 FROM debian:bullseye-20241111-slim
 
 # Set non-interactive mode for apt-get
-ENV DEBIAN_FRONTEND noninteractive
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Install necessary packages: gnupg, vim, parallel, g++
+# Install necessary packages: gnupg, vim, parallel, g++, python3 (needed for udocker)
 RUN apt-get update -y  \
     && apt-get install -y \
         gnupg2 \
@@ -12,12 +12,17 @@ RUN apt-get update -y  \
         parallel \
         g++ \
         wget \
+        python3 \
+        curl \
+        ca-certificates \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
+# Create python symlink for udocker compatibility
+RUN ln -sf /usr/bin/python3 /usr/bin/python
+
 # Add Docker's official GPG key:
 RUN apt-get update
-RUN apt-get install -y ca-certificates curl
 RUN install -m 0755 -d /etc/apt/keyrings
 RUN curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
 RUN chmod a+r /etc/apt/keyrings/docker.asc
@@ -33,16 +38,12 @@ RUN apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugi
 # Copy the local keys into the Docker image
 COPY keys /keys
 
-# Import GPG keys
-RUN gpg --import /keys/AA8E81B4331F7F50.asc \
-    && gpg --import /keys/DCC9EFBF77E11517.asc \
-    && gpg --import /keys/112695A0E562B32A.asc \
-    && gpg --import /keys/04EE7237B7D453EC.asc \
-    && gpg --import /keys/EF0F382A1A7B6500.asc \
-    && gpg --import /keys/648ACFD622F3D138.asc \
-    && gpg --import /keys/DCC9EFBF77E11517.asc \
-    && gpg --import /keys/54404762BBB6E853.asc \
-    && gpg --import /keys/0E98404D386FA1D9.asc
+# Import GPG keys (continue on error - some keys may be optional or corrupted)
+RUN for key in /keys/*.asc; do \
+        if [ -f "$key" ]; then \
+            gpg --import "$key" || echo "Warning: Failed to import $key"; \
+        fi; \
+    done || true
 
 # Update the package lists and install GridEngine packages
 RUN apt-get update -y && apt-get install -y gridengine-exec gridengine-master gridengine-qmon
@@ -51,10 +52,36 @@ RUN apt-get update -y && apt-get install -y gridengine-exec gridengine-master gr
 RUN useradd -m application \
     && echo "application:application" | chpasswd
 
-# Make sure host and container share the same GID for group 'docker', bc it has reading permissions to the socket file
-ARG DOCKER_GROUP
-RUN groupmod -g $DOCKER_GROUP docker
-RUN usermod -aG docker application
+# Note: Docker group GID modification and user addition will be done at runtime
+# (like Harbor image) for flexibility. The docker group is created by docker-ce installation.
+# Runtime command should include:
+#   groupmod -g $DOCKER_GROUP docker && usermod -aG docker application
+
+# Install udocker
+# Download and extract udocker
+RUN curl -L https://github.com/indigo-dc/udocker/releases/download/1.3.16/udocker-1.3.16.tar.gz -o /tmp/udocker.tgz \
+    && mkdir -p /opt/udocker \
+    && tar -xzf /tmp/udocker.tgz -C /opt/udocker --strip-components=1 \
+    && rm -f /tmp/udocker.tgz
+
+# Create udocker wrapper script (so it works without PYTHONPATH and sets UDOCKER_DIR)
+RUN cat > /usr/local/bin/udocker <<'EOF' && chmod +x /usr/local/bin/udocker
+#!/bin/sh
+export PYTHONPATH=/opt/udocker/udocker
+export UDOCKER_DIR=${UDOCKER_DIR:-/shared_data/udocker}
+exec /opt/udocker/udocker/maincmd.py "$@"
+EOF
+
+# Set up udocker directory structure (will be mounted at runtime)
+# Create base directory structure
+RUN mkdir -p /shared_data/udocker
+
+# Set UDOCKER_DIR environment variable (so udocker knows where to store data)
+ENV UDOCKER_DIR=/shared_data/udocker
+
+# Set permissions for application user to use udocker
+RUN chown -R application:application /opt/udocker \
+    && chown -R application:application /shared_data/udocker
 
 # Add setup script and set permissions
 ADD setup_gridengine.sh /usr/local/bin/setup_gridengine.sh
@@ -68,11 +95,12 @@ RUN chmod +x /usr/local/bin/modify_config.sh
 RUN chmod +x /usr/local/bin/modify_sched_config.sh
 RUN chmod +x /usr/local/bin/run_sched_logger.sh
 
-ARG SUBMITTER_HOSTNAME
-RUN echo "$SUBMITTER_HOSTNAME" > /home/application/submit_hosts.list
-RUN cat /home/application/submit_hosts.list
+# Note: submit_hosts.list will be created at runtime (like Harbor image)
+# Runtime command should include:
+#   echo "$SUBMITTER_HOSTNAME" > /home/application/submit_hosts.list
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 CMD ["/entrypoint.sh"]
+
