@@ -1134,14 +1134,18 @@ class Tooljob
 		$timestamp = date('Y-m-d_H-i-s');
 		$this->containerName = $tool['infrastructure']['container_image'] . "_" . $_SESSION['User']['id'] . "_" . $timestamp;
 		$cmd_envs = "";
-		foreach ($tool['infrastructure']['container_env'] as $env_key => $env_value) {
-			$cmd_envs .= "-e $env_key=$env_value ";
-		}
-
-		foreach ($tool['infrastructure']['volumes'] as $hostDir => $containerDir) {
-			$userHomeDir = $GLOBALS['shared'] . "userdata_tmp/{$_SESSION['User']['id']}" . "/" . $this->project;
-			$cmd_envs .= "-v $userHomeDir" . "$hostDir:$containerDir ";
-		}
+		if (isset($tool['infrastructure']['container_env']) && is_array($tool['infrastructure']['container_env'])) {
+			foreach ($tool['infrastructure']['container_env'] as $env_key => $env_value) {
+				$cmd_envs .= "-e $env_key=$env_value ";
+			}
+			}
+	
+			if (isset($tool['infrastructure']['volumes']) && is_array($tool['infrastructure']['volumes'])) {
+			foreach ($tool['infrastructure']['volumes'] as $hostDir => $containerDir) {
+				$userHomeDir = $GLOBALS['shared'] . "userdata_tmp/{$_SESSION['User']['id']}" . "/" . $this->project;
+				$cmd_envs .= "-v $userHomeDir" . "$hostDir:$containerDir ";
+			}
+			}
 
 		if ($tool['infrastructure']['interactive']) {
 			if ($tool['infrastructure']['docker_type'] == "compose") {
@@ -1156,13 +1160,24 @@ class Tooljob
 				" --out_metadata "   . $this->stageout_file_virtual .
 				" --log_file "       . $this->log_file_virtual;
 
-
-			$cmd =  "docker run --privileged -v /var/run/docker.sock:/var/run/docker.sock -d" .
-				" " . $cmd_envs .
-				"--memory=" . $tool['infrastructure']['memory']. "g" .
-				" -v " . $this->pub_dir_volumes . ":" . $GLOBALS['shared'] . "public_tmp/ " .
-				" -v " . $this->root_dir_volumes . ":" . $GLOBALS['shared'] . "userdata_tmp/{$_SESSION['User']['id']}" .
-				" " . $tool['infrastructure']['container_image'] . " $cmd_vre";
+			$useUdocker = (isset($tool['infrastructure']['container_engine']) && $tool['infrastructure']['container_engine'] == "udocker")
+				|| getenv('USE_UDOCKER');
+			if ($useUdocker) {
+				$udockerBin = getenv('UDOCKER_BIN') ?: "udocker";
+				$udockerOpts = getenv('UDOCKER_OPTS') ?: "--rm";
+				$cmd = "$udockerBin run $udockerOpts" .
+					" " . $cmd_envs .
+					" -v " . $this->pub_dir_volumes . ":" . $GLOBALS['shared'] . "public_tmp/ " .
+					" -v " . $this->root_dir_volumes . ":" . $GLOBALS['shared'] . "userdata_tmp/{$_SESSION['User']['id']}" .
+					" " . $tool['infrastructure']['container_image'] . " $cmd_vre";
+			} else {
+				$cmd =  "docker run --privileged -v /var/run/docker.sock:/var/run/docker.sock -d" .
+					" " . $cmd_envs .
+					"--memory=" . $tool['infrastructure']['memory']. "g" .
+					" -v " . $this->pub_dir_volumes . ":" . $GLOBALS['shared'] . "public_tmp/ " .
+					" -v " . $this->root_dir_volumes . ":" . $GLOBALS['shared'] . "userdata_tmp/{$_SESSION['User']['id']}" .
+					" " . $tool['infrastructure']['container_image'] . " $cmd_vre";
+			}
 		}
 
 		return $cmd;
