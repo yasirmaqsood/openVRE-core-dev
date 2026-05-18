@@ -3,7 +3,7 @@
 Deploy the [OpenVRE](https://openvre.eu/) Virtual Research Environment on any
 Kubernetes cluster.
 
-If you are new to Helm or this chart, start with **[GETTING_STARTED.md](./GETTING_STARTED.md)**. It includes the full verified lab flow: fresh-cluster storage, ingress-nginx in a VM, Keycloak client/user setup, Mongo launcher switch, and Kubernetes-native tool execution.
+If you are new to Helm or this chart, start with **[GETTING_STARTED.md](./GETTING_STARTED.md)** (step-by-step install, storage, and first checks).
 
 ## Prerequisites
 
@@ -41,8 +41,7 @@ All settings live in `values.yaml`. Below are the most important ones.
 
 | Key | Description |
 |---|---|
-| `domain.host` | Your domain name (e.g. `openvre.example.com`; use only the hostname, no port) |
-| `keycloak.frontendUrl` | Public Keycloak URL if it differs from `http://<domain.host>/auth`, e.g. `http://openvre.local:30080/auth` for NodePort labs |
+| `domain.host` | Your domain name (e.g. `openvre.example.com`) |
 | `secrets.dashboardMongo.rootPassword` | MongoDB root password |
 | `secrets.dashboardMongo.appPassword` | MongoDB application password |
 | `secrets.frontend.keycloakSecret` | Keycloak OIDC client secret |
@@ -55,7 +54,7 @@ All settings live in `values.yaml`. Below are the most important ones.
 | Key | Default | Description |
 |---|---|---|
 | `images.frontend.repository` | `ymaqsoodbsc/openvre-kubernetes` | Frontend Docker image |
-| `images.frontend.tag` | `frontend-2.0` | Frontend image tag |
+| `images.frontend.tag` | `frontend-1.0` | Frontend image tag |
 | `images.sgecore.repository` | `ymaqsoodbsc/openvre-kubernetes` | SGE core Docker image |
 | `images.sgecore.tag` | `sgecore-1.0` | SGE core image tag |
 | `images.keycloak.repository` | `quay.io/keycloak/keycloak` | Keycloak image |
@@ -64,8 +63,6 @@ All settings live in `values.yaml`. Below are the most important ones.
 | `images.dashboardMongo.tag` | `8.0` | MongoDB image tag |
 | `postgres.image.repository` | `postgres` | PostgreSQL image |
 | `postgres.image.tag` | `17.3` | PostgreSQL image tag |
-| `scheduler.image.repository` | `ymaqsoodbsc/openvre-kubernetes` | Scheduler image |
-| `scheduler.image.tag` | `scheduler-1.0` | Scheduler image tag |
 
 ### Storage
 
@@ -87,34 +84,6 @@ frontend:
     persistence:
       storageClassName: "my-storage-class"
 ```
-
-For a fresh VM/lab cluster with no provisioner, `GETTING_STARTED.md` shows how to install Rancher's `local-path-provisioner` and set all four persistence blocks to `storageClassName: "local-path"`.
-
-### VM / NodePort ingress
-
-For a single VM on your laptop, the verified lab setup uses `ingress-nginx` as a NodePort service:
-
-```yaml
-domain:
-  host: "openvre.local"
-  ingressClassName: nginx
-  tlsEnabled: false
-
-keycloak:
-  frontendUrl: "http://openvre.local:30080/auth"
-
-frontend:
-  ingress:
-    enabled: true
-```
-
-Add `openvre.local` to your laptop hosts file pointing to the VM IP, then open:
-
-```text
-http://openvre.local:30080
-```
-
-`domain.host` must not include the port because Kubernetes Ingress host rules only accept hostnames. `keycloak.frontendUrl` includes the port so Keycloak redirects match the URL used by the browser.
 
 ### Component toggles
 
@@ -194,54 +163,7 @@ Create the OIDC client matching **`frontend.env.keycloakClient`** (default **`op
 
 ### Users
 
-Create at least one user in the realm your frontend uses. For OpenVRE login to complete, the Keycloak user must have an email claim. The tested setup uses:
-
-```text
-username: testuser
-email: testuser@example.com
-firstName: Test
-lastName: User
-emailVerified: true
-```
-
-See `GETTING_STARTED.md` for both UI and `kcadm.sh` commands. If login redirects back to OpenVRE but the top bar still shows **Login**, check the user's `email`, `firstName`, `lastName`, and `emailVerified` fields.
-
-### Kubernetes-native tool execution
-
-The chart includes a lightweight `scheduler` Deployment. The frontend submits tool Jobs to this scheduler, and the scheduler creates Kubernetes `batch/v1` Jobs using its ServiceAccount.
-
-To make the seeded `local` site use Kubernetes Jobs, update MongoDB:
-
-```javascript
-db.sites.updateOne(
-  { _id: "local" },
-  {
-    $set: {
-      "launcher.job_manager": "kubernetes_native",
-      "launcher.container": "Kubernetes"
-    }
-  }
-)
-```
-
-Each tool also needs a valid container image and reasonable resources in its Mongo document:
-
-```javascript
-db.tools.updateOne(
-  { _id: "tool_skeleton" },
-  {
-    $set: {
-      "infrastructure.clouds.local.launcher": "kubernetes_native",
-      "infrastructure.clouds.local.queue": "kubernetes",
-      "infrastructure.container_image": "ymaqsoodbsc/fem-tool-2-updated:1.0",
-      "infrastructure.cpus": 1,
-      "infrastructure.memory": 1
-    }
-  }
-)
-```
-
-For Kubernetes-native Jobs, CPU and memory come from MongoDB tool metadata (`infrastructure.cpus` and `infrastructure.memory`), not from `scheduler.resources` in `values.yaml`. On small VM clusters, start with `cpus: 1` and `memory: 1` to avoid `Insufficient cpu` / `Insufficient memory` scheduling errors.
+Create at least one user in the realm your frontend uses.
 
 ## Upgrading
 
