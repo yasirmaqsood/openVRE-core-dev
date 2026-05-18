@@ -77,6 +77,18 @@ function sanitizeString($s)
 	return strip_tags(trim((string)$s));
 }
 
+/** Match scheduler sanitize_path_segment() for interactive ingress paths. */
+function sanitizeInteractiveUserPath($userId, $maxLen = 48)
+{
+	$value = strtolower((string)$userId);
+	$value = preg_replace('/[^a-z0-9_-]+/', '-', $value);
+	$value = trim($value, '-');
+	if ($value === '') {
+		$value = 'user';
+	}
+	return substr($value, 0, $maxLen);
+}
+
 function returnHumanDate($q)
 {
 	$d = explode("*", $q);

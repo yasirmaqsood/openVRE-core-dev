@@ -31,6 +31,8 @@ class Tooljob
 	public $pub_dir_intern;
 
 	public $containerName;
+	public $access_path;
+	public $interactive_tool = array();
 
 	// Paths to files genereted during ToolJob execution
 	public $config_file;
@@ -85,8 +87,12 @@ class Tooljob
 				[$cloud, $launcher] = array_pad(explode('_', $full, 2), 2, '');
 				$this->cloudName = $cloud;
 				$this->launcher  = $launcher;
-				//error_log("DEBUG: parsed cloudName = $cloud");
-				//error_log("DEBUG: parsed launcher = $launcher");
+				if ($this->launcher === '' && $this->cloudName !== '') {
+					$siteDoc = $GLOBALS['sitesCol']->findOne(['_id' => $this->cloudName]);
+					if ($siteDoc && !empty($siteDoc['launcher']['job_manager'])) {
+						$this->launcher = $siteDoc['launcher']['job_manager'];
+					}
+				}
 			}
 			} else {
 			// No site_list provided → fallback
@@ -98,6 +104,12 @@ class Tooljob
 		switch ($this->launcher) {
 			case "SGE":
 			case "docker_SGE":
+				$this->root_dir_virtual = $GLOBALS['clouds'][$this->cloudName]['dataDir_virtual'] . "/" . $_SESSION['User']['id'];
+				$this->root_dir_mug     = $GLOBALS['clouds'][$this->cloudName]['dataDir_virtual'];
+				$this->pub_dir_virtual  = $GLOBALS['clouds'][$this->cloudName]['pubDir_virtual'];
+				$this->pub_dir_volumes  = $GLOBALS['clouds'][$this->cloudName]['pubDir_host'];
+				$this->root_dir_volumes  = $GLOBALS['clouds'][$this->cloudName]['dataDir_host'] . "/" . $_SESSION['User']['id'];
+				$this->pub_dir_intern   = rtrim($this->pub_dir_virtual, "/") . "_tmp";
 			case "kubernetes_native":
 				$this->root_dir_virtual = $GLOBALS['clouds'][$this->cloudName]['dataDir_virtual'] . "/" . $_SESSION['User']['id'];
 				$this->root_dir_mug     = $GLOBALS['clouds'][$this->cloudName]['dataDir_virtual'];
@@ -1118,6 +1130,15 @@ class Tooljob
 					break;
 
 				case "kubernetes_native":
+					if (!empty($tool['infrastructure']['interactive'])) {
+						$this->job_type = "interactive";
+						$marker = "# OpenVRE kubernetes interactive session (provisioned via scheduler)\n";
+						$submissionFilename = $this->createSubmitFile_SGE($marker);
+						if (!is_file($submissionFilename)) {
+							return 0;
+						}
+						break;
+					}
 					$cmd  = $this->setBashCmd_SGE($tool);
 					if (!$cmd) {
 						return 0;
@@ -1831,6 +1852,10 @@ EOF;
 		$memory = $launcherInfo['memory'] ?? $tool['infrastructure']['memory'];
 		$cpus = $launcherInfo['cpus'] ?? $tool['infrastructure']['cpus'];
 		$queue = $launcherInfo['queue'] ?? $tool['infrastructure']['clouds'][$this->cloudName]['queue'];
+		if ($jobManager === "kubernetes_native" && !empty($tool['infrastructure']['interactive'])) {
+			return $this->enqueueInteractiveK8s($tool, $cpus, $memory);
+		}
+
 		$jobOptions = array();
 		if ($jobManager === "kubernetes_native") {
 			$jobOptions["image"] = $tool['infrastructure']['container_image'] ?? "";
@@ -1857,6 +1882,45 @@ EOF;
 
 		$this->pid = $pid;
 		return $pid;
+	}
+
+
+	protected function enqueueInteractiveK8s($tool, $cpus, $memory)
+	{
+		require_once __DIR__ . "/ProcessK8sInteractive.php";
+		$process = new ProcessK8sInteractive();
+		$userId = $_SESSION['User']['id'] ?? "";
+		if (!$process->createSession($tool, $userId)) {
+			$err = $process->getErr() ?: "Cannot create interactive session";
+			log_addError(0, $err, NULL, $this->toolId, $this->cloudName, "kubernetes_interactive", $cpus, $memory);
+			$_SESSION['errorData']['Error'][] = "Internal error. Cannot start interactive session.<br/>" . $err;
+			return 0;
+		}
+
+		$this->job_type = "interactive";
+		$this->launcher = "kubernetes_interactive";
+		$this->pid = $process->getPid();
+		$sessionPath = $process->getAccessUrl();
+		if (getenv("OPENVRE_K8S_SCHEDULER_URL") !== "") {
+			$this->access_path = "/applib/interactiveGateway.php?path="
+				. urlencode(rtrim($sessionPath, "/"));
+		} else {
+			$this->access_path = $sessionPath;
+		}
+		$this->containerName = ltrim($sessionPath, "/");
+		$this->interactive_tool = array(
+			"container_name" => $this->containerName,
+			"access_url" => $this->access_path,
+			"k8s_name" => $this->pid,
+		);
+
+		logger(
+			"USER:" . $_SESSION['User']['_id'] . ", ID:" . $_SESSION['User']['id']
+			. ", LAUNCHER:kubernetes_interactive, TOOL:" . $this->toolId
+			. ", PID:" . $this->pid . ", URL:" . $this->access_path
+		);
+		log_addSubmission($this->pid, $this->toolId, $this->cloudName, "kubernetes_interactive", $cpus, $memory, $this->working_dir);
+		return $this->pid;
 	}
 
 

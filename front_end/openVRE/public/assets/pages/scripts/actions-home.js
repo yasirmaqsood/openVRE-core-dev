@@ -729,6 +729,12 @@ function closeModalTool() {
 
 
 function goInteractiveTool(toolContainerName) {
-	location.href = "interactive-tool/" + toolContainerName + "/";
+	if (toolContainerName && toolContainerName.indexOf('/applib/interactiveGateway.php') === 0) {
+		location.href = toolContainerName;
+	} else if (toolContainerName && toolContainerName.charAt(0) === '/') {
+		location.href = '/applib/interactiveGateway.php?path=' + encodeURIComponent(toolContainerName.replace(/\/$/, ''));
+	} else {
+		location.href = "interactive-tool/" + toolContainerName + "/";
+	}
 }
 

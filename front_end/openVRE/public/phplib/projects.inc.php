@@ -1356,7 +1356,14 @@ function processPendingFiles($sessionId, $files = array())
 
 			if ($jobProcess['state'] == "RUNNING" && $job['job_type'] == "interactive") {
 				$fileDummy['pending'] = "ACTIVE SESSION";
-				$fileDummy['toolContainerName'] = $_SESSION['User']['lastjobs'][$pid]['containerName'];
+				$lastJob = $_SESSION['User']['lastjobs'][$pid];
+				if (!empty($lastJob['access_path'])) {
+					$fileDummy['toolContainerName'] = $lastJob['access_path'];
+				} elseif (!empty($lastJob['interactive_tool']['access_url'])) {
+					$fileDummy['toolContainerName'] = $lastJob['interactive_tool']['access_url'];
+				} else {
+					$fileDummy['toolContainerName'] = $lastJob['containerName'];
+				}
 			}
 
 			//list job in workspace
@@ -1377,6 +1384,13 @@ function processPendingFiles($sessionId, $files = array())
 
 			//get tool info
 			$tool = getTool_fromId($job['toolId'], 1);
+			if (!empty($job['job_type']) && $job['job_type'] === 'interactive') {
+				log_addFinish($pid, "Interactive session $pid ended (no batch stageout)");
+				if (isset($SGE_updated[$pid])) {
+					unset($SGE_updated[$pid]);
+				}
+				continue;
+			}
 			if (! isset($tool['_id'])) {
 				$_SESSION['errorData']['Internal'][] = "toolId '" . $job['toolId'] . "' received from JobTool not registered";
 				$_SESSION['errorData']['Error'][] = "Cannot obtain results from '$title' in folder '" . basename($job['working_dir']) . "'. Job metadata is not valid.";
@@ -1906,7 +1920,7 @@ function  build_outputs_list($tool, $stageout_job, $stageout_file)
 				continue;
 			}
 		}
-	} elseif ($tool['external'] !== false) {
+	} elseif ($tool['external'] !== false && empty($tool['infrastructure']['interactive'])) {
 		$_SESSION['errorData']['Warning'][] = date("h:i:s") . ": Tool stageout file '" . $stageout_file . "' is not found";
 	}
 	print "\n__________FROM FILE________________\n";
@@ -2347,7 +2361,12 @@ function resolvePath_toLocalAbsolutePath($path, $job)
 				$rfn = str_replace($job['root_dir_virtual'], $GLOBALS['dataDir'] . $_SESSION['User']['id'], $path);
 
 				//SGE finds mounted dataDir as root_dir_virtual
-			} elseif ($job['launcher'] == "SGE" || $job['launcher'] == "ega_demo" || $job['launcher'] == "docker_SGE" || $job['launcher'] == "kubernetes_native") {
+			} elseif (
+				$job['launcher'] == "SGE" ||
+				$job['launcher'] == "ega_demo" ||
+				$job['launcher'] == "docker_SGE" ||
+				$job['launcher'] == "kubernetes_native"
+			) {
 				$rfn = str_replace($job['root_dir_mug'], $GLOBALS['dataDir'], $path);
 			}
 			// direct from file_path

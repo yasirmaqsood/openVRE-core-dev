@@ -95,6 +95,15 @@ if (!isset($_GET['code'])) {
     // load user
     $user = loadUserWithToken($resourceOwner, $accessToken, $jwt);
 
+    if (!empty($_SESSION["interactive_return_url"])) {
+        $returnUrl = $_SESSION["interactive_return_url"];
+        unset($_SESSION["interactive_return_url"]);
+        if (preg_match("#^https?://#i", $returnUrl)) {
+            header("Location: " . $returnUrl);
+            exit;
+        }
+    }
+
     if ($user) {
         redirect("../home/redirect.php");
     } else {

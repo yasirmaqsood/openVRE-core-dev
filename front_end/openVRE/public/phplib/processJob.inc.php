@@ -151,10 +151,16 @@ function getRunningJobInfo($pid, $launcherType = NULL, $cloudName = "local")
 
     logger("getRunningJobInfo: start processing $pid");
 
+    if (strpos((string)$pid, "openvre-ix-") === 0) {
+        $launcherType = "kubernetes_interactive";
+    }
+
     // guess launcher
     if (!$launcherType) {
         if (is_numeric($pid)) {
             $launcherType = "SGE";
+        } elseif (strpos((string)$pid, "openvre-ix-") === 0) {
+            $launcherType = "kubernetes_interactive";
         } elseif (strpos((string)$pid, "-") !== false) {
             $launcherType = "kubernetes_native";
         } else {
@@ -167,6 +173,11 @@ function getRunningJobInfo($pid, $launcherType = NULL, $cloudName = "local")
     if ($launcherType == "SGE" || $launcherType == "docker_SGE") {
         $process = new ProcessSGE();
         $job = $process->getRunningJobInfo($pid);
+    } elseif ($launcherType == "kubernetes_interactive") {
+        require_once __DIR__ . "/classes/ProcessK8sInteractive.php";
+        $process = new ProcessK8sInteractive();
+        $job = $process->getRunningJobInfo($pid);
+        logger("getRunningJobInfo (kubernetes_interactive): pid=$pid state=" . ($job['state'] ?? 'none'));
     } elseif ($launcherType == "kubernetes_native") {
         require_once __DIR__ . "/classes/ProcessK8s.php";
         $process = new ProcessK8s();
@@ -323,6 +334,10 @@ function delJob($pid, $launcherType = NULL, $cloudName = "local", $login = NULL)
         return false;
     }
 
+    if (strpos((string)$pid, "openvre-ix-") === 0) {
+        $launcherType = "kubernetes_interactive";
+    }
+
     // guess launcher
     if (!$launcherType) {
         if (is_numeric($pid)) {
@@ -334,9 +349,13 @@ function delJob($pid, $launcherType = NULL, $cloudName = "local", $login = NULL)
         }
     }
 
+    $isK8sInteractive = ($launcherType === "kubernetes_interactive");
+
     // cancel job
     $r_sge = false;
-    $r_docker = false;
+    $r_docker = true;
+    $msg_sge = "";
+    $msg_docker = "";
     if ($launcherType == "SGE" || $launcherType == "docker_SGE") {
         $processSGE = new ProcessSGE();
         list($r_sge, $msg_sge) = $processSGE->stop($pid);
@@ -346,16 +365,26 @@ function delJob($pid, $launcherType = NULL, $cloudName = "local", $login = NULL)
             updateLogFromJobInfo($jobInfo['log'], $pid, $launcherType, $cloudName);
             // Add any other file redirection logic here
         }
+    } elseif ($isK8sInteractive) {
+        require_once __DIR__ . "/classes/ProcessK8sInteractive.php";
+        $processIx = new ProcessK8sInteractive();
+        list($r_sge, $msg_sge) = $processIx->stop($pid);
+        logger("delJob (kubernetes_interactive): pid=$pid stop_ok=" . ($r_sge ? "1" : "0") . " msg=" . $msg_sge);
     } elseif ($launcherType == "kubernetes_native") {
-        error_log("DEBUG: delJob kubernetes_native pid=$pid calling ProcessK8s::stop");
-        require_once __DIR__ . "/classes/ProcessK8s.php";
-        $processK8s = new ProcessK8s();
-        list($r_sge, $msg_sge) = $processK8s->stop($pid);
-        error_log(
-            "DEBUG: delJob kubernetes_native pid=$pid stop_ok=" . ($r_sge ? "1" : "0")
-            . " msg=" . $msg_sge
-        );
-        logger("delJob (kubernetes_native): pid=$pid stop_ok=" . ($r_sge ? "1" : "0") . " msg=" . $msg_sge);
+        $jobUser = isset($_SESSION['User']['lastjobs'][$pid]) ? $_SESSION['User']['lastjobs'][$pid] : null;
+        if ($jobUser && isset($jobUser['job_type']) && $jobUser['job_type'] === "interactive") {
+            require_once __DIR__ . "/classes/ProcessK8sInteractive.php";
+            $processIx = new ProcessK8sInteractive();
+            list($r_sge, $msg_sge) = $processIx->stop($pid);
+            $isK8sInteractive = true;
+            logger("delJob (kubernetes_native interactive): pid=$pid stop_ok=" . ($r_sge ? "1" : "0"));
+        } else {
+            error_log("DEBUG: delJob kubernetes_native pid=$pid calling ProcessK8s::stop");
+            require_once __DIR__ . "/classes/ProcessK8s.php";
+            $processK8s = new ProcessK8s();
+            list($r_sge, $msg_sge) = $processK8s->stop($pid);
+            logger("delJob (kubernetes_native): pid=$pid stop_ok=" . ($r_sge ? "1" : "0") . " msg=" . $msg_sge);
+        }
     } elseif ($launcherType == "PMES") {
         $process = new ProcessPMES();
         $r = $process->stop($pid);
@@ -367,55 +396,60 @@ function delJob($pid, $launcherType = NULL, $cloudName = "local", $login = NULL)
         return false;
     }
 
-    $processSGE = new ProcessSGE();
-    $jobInfo = $processSGE->getRunningJobInfo($pid);
-    $jobUser = $_SESSION['User']['lastjobs'][$pid];
+    $jobUser = isset($_SESSION['User']['lastjobs'][$pid]) ? $_SESSION['User']['lastjobs'][$pid] : null;
 
-    if ($jobUser && $jobUser['job_type'] == "interactive") {
-        $jobUser = $_SESSION['User']['lastjobs'][$pid];
-        // Stop the Docker container
-        $containerName = $jobUser['interactive_tool']['container_name'];
-        // Obtain rdata and history before stopping the Docker container
+    if (
+        !$isK8sInteractive
+        && $jobUser
+        && ($jobUser['job_type'] ?? '') === "interactive"
+    ) {
+        $r_docker = false;
+        $processSGE = new ProcessSGE();
+        $jobInfo = $processSGE->getRunningJobInfo($pid);
+        $containerName = $jobUser['interactive_tool']['container_name'] ?? $jobUser['containerName'] ?? "";
+        if ($containerName === "") {
+            $_SESSION['errorData']['Error'][] = "Cannot delete interactive job [id = $pid]. Container name not found.";
+            return false;
+        }
         $dockerExecCommand = "docker exec $containerName Rscript -e 'save.image(\"./RData\"); savehistory(file = \".Rhistory\")'";
         $dockerExecProcess = new ProcessSGE($dockerExecCommand, "/tmp/", "local.q", "$pid-save-history", 1, 0, "$pid-save-history.out", "$pid-save-history.err");
-
-        return false;
-        //die(0);
-        //Stop the Docker container
         $dockerStopCommand = "docker stop $containerName";
         $dockerStopProcess = new ProcessSGE($dockerStopCommand);
         list($r_docker, $msg_docker) = $dockerStopProcess->run();
-
-        // Assuming that you have functions to handle Docker container logs, update the following lines accordingly
-        $dockerLogsCommand = "docker logs $containerName >> {$GLOBALS['dataDir']}/{$jobInfo['log']}";
-        $dockerLogsProcess = new ProcessSGE($dockerLogsCommand);
-        $dockerLogsProcess->run();
-        // Add any other Docker container handling logic here
-
+        if (!empty($jobInfo['log'])) {
+            $dockerLogsCommand = "docker logs $containerName >> {$GLOBALS['dataDir']}/{$jobInfo['log']}";
+            $dockerLogsProcess = new ProcessSGE($dockerLogsCommand);
+            $dockerLogsProcess->run();
+        }
     }
+
     if (!$r_sge || !$r_docker) {
         $_SESSION['errorData']['Error'][] = "Cannot delete $launcherType job [id = $pid].<br/> SGE Error: $msg_sge<br/>Docker Error: $msg_docker";
+        return false;
     }
 
-
-    $_SESSION['errorData']['Info'][] = "Job successfully cancelled";
+    if ($isK8sInteractive) {
+        $_SESSION['errorData']['Info'][] = "Interactive session stopped and Kubernetes resources removed.";
+    } else {
+        $_SESSION['errorData']['Info'][] = "Job successfully cancelled";
+    }
     logger("JOB $pid FINISHED. HAS BEEN CANCELLED");
     log_addFinish($pid, "Job has been cancelled");
 
-    // wait to make qdel/terminateActivity effective
-    sleep(15);
-
-    // check job status and register output files, if required
-    if ($r_sge) {
-        if (!$login) {
-            $login = $_SESSION['User']['_id'];
-        }
-        //$filesPending= processPendingFiles($login);
-        //delUserJob($login,$pid); // directly deleting job entry leds to no output registration! 
-    } else {
-        $_SESSION['errorData']['Internal Error'][] = "Error while cancelling $launcherType job [id = $pid].<br>Job deleted from the system, but not from user metadata";
-        return false;
+    if (!$isK8sInteractive) {
+        sleep(15);
     }
+
+    if (!$login) {
+        $login = $_SESSION['User']['_id'];
+    }
+    if ($isK8sInteractive) {
+        delUserJob($login, $pid);
+        if (isset($_SESSION['User']['lastjobs'][$pid])) {
+            unset($_SESSION['User']['lastjobs'][$pid]);
+        }
+    }
+
     return true;
 }
 /*
