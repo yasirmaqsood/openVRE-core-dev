@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard-postgres
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dashboard-postgres
+  template:
+    metadata:
+      labels:
+        app: dashboard-postgres
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: dashboard-postgres
+        image: postgres:17.3
+        ports:
+        - containerPort: 5432
+        envFrom:
+        - configMapRef:
+            name: dashboard-postgres-env
+        - secretRef:
+            name: dashboard-postgres-password
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 256Mi
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: dashboard-postgres-data

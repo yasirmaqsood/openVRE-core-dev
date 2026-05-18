@@ -1,0 +1,71 @@
+{{- if .Values.hardening.podDisruptionBudgets.enabled }}
+{{- if .Values.components.frontend.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: dashboard-frontend
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  minAvailable: {{ .Values.hardening.podDisruptionBudgets.minAvailable }}
+  selector:
+    matchLabels:
+      app: dashboard-frontend
+---
+{{- end }}
+{{- if .Values.components.keycloak.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: dashboard-keycloak
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  minAvailable: {{ .Values.hardening.podDisruptionBudgets.minAvailable }}
+  selector:
+    matchLabels:
+      app: dashboard-keycloak
+---
+{{- end }}
+{{- if .Values.components.dashboardMongo.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: dashboard-mongodb
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  minAvailable: {{ .Values.hardening.podDisruptionBudgets.minAvailable }}
+  selector:
+    matchLabels:
+      app: dashboard-mongodb
+---
+{{- end }}
+{{- if .Values.components.postgres.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: dashboard-postgres
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  minAvailable: {{ .Values.hardening.podDisruptionBudgets.minAvailable }}
+  selector:
+    matchLabels:
+      app: dashboard-postgres
+---
+{{- end }}
+{{- if .Values.components.sgecore.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: dashboard-sgecore
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  minAvailable: {{ .Values.hardening.podDisruptionBudgets.minAvailable }}
+  selector:
+    matchLabels:
+      app: dashboard-sgecore
+{{- end }}
+{{- end }}

@@ -1,0 +1,150 @@
+{{- if .Values.components.keycloak.enabled }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dashboard-keycloak-password
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+type: Opaque
+stringData:
+  KEYCLOAK_PASSWORD: {{ .Values.secrets.keycloak.adminPassword | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-keycloak-env
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+data:
+  DB_VENDOR: POSTGRES
+  DB_ADDR: {{ printf "%s.%s.svc.cluster.local:%v" .Values.keycloak.database.host .Release.Namespace .Values.keycloak.database.port | quote }}
+  DB_SCHEMA: {{ .Values.keycloak.database.schema | quote }}
+  KEYCLOAK_USER: {{ .Values.secrets.keycloak.adminUser | quote }}
+  PROXY_ADDRESS_FORWARDING: {{ .Values.keycloak.proxyAddressForwarding | quote }}
+  KEYCLOAK_FRONTEND_URL: {{ .Values.keycloak.frontendUrl | default (printf "http://%s/auth" .Values.domain.host) | quote }}
+  KEYCLOAK_REALM: {{ .Values.keycloak.realm | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard-keycloak
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  ports:
+    - name: api
+      port: {{ .Values.keycloak.service.port }}
+      targetPort: {{ .Values.keycloak.service.port }}
+      protocol: TCP
+  selector:
+    app: dashboard-keycloak
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard-keycloak
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  replicas: {{ .Values.keycloak.replicaCount }}
+  selector:
+    matchLabels:
+      app: dashboard-keycloak
+  template:
+    metadata:
+      labels:
+        app: dashboard-keycloak
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      {{- if .Values.keycloak.realmImport.enabled }}
+      initContainers:
+        - name: keycloak-realm-prepare
+          image: {{ .Values.keycloak.realmImport.initImage | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 65534
+            capabilities:
+              drop:
+                - ALL
+          command: ["python3", "-c"]
+          args:
+            - |
+              import json, os, pathlib
+              pathlib.Path("/realm-out").mkdir(parents=True, exist_ok=True)
+              secret = os.environ["KC_CLIENT_SECRET"]
+              with open("/realm-in/realm-sample.json") as f:
+                  realm = json.load(f)
+              for client in realm.get("clients", []):
+                  if client.get("clientId") == {{ .Values.keycloak.realmImport.oidcClientId | quote }}:
+                      client["secret"] = secret
+                      break
+              with open("/realm-out/realm.json", "w") as out:
+                  json.dump(realm, out)
+          env:
+            - name: KC_CLIENT_SECRET
+              value: {{ .Values.secrets.frontend.keycloakSecret | quote }}
+          volumeMounts:
+            - name: realm-source
+              mountPath: /realm-in
+              readOnly: true
+            - name: realm-work
+              mountPath: /realm-out
+      {{- end }}
+      containers:
+        - name: dashboard-keycloak
+          image: {{ .Values.images.keycloak.repository }}:{{ .Values.images.keycloak.tag }}
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          args:
+            - -b
+            - 0.0.0.0
+          envFrom:
+            - secretRef:
+                name: dashboard-keycloak-password
+            - configMapRef:
+                name: dashboard-keycloak-env
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: dashboard-postgres-password
+                  key: POSTGRES_PASSWORD
+            - name: DB_DATABASE
+              valueFrom:
+                configMapKeyRef:
+                  name: dashboard-postgres-env
+                  key: POSTGRES_DB
+            - name: DB_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: dashboard-postgres-env
+                  key: POSTGRES_USER
+            {{- if .Values.keycloak.realmImport.enabled }}
+            - name: KEYCLOAK_IMPORT
+              value: /realm-work/realm.json
+            {{- end }}
+          {{- if .Values.keycloak.realmImport.enabled }}
+          volumeMounts:
+            - name: realm-work
+              mountPath: /realm-work
+              readOnly: true
+          {{- end }}
+          resources:
+            {{- toYaml .Values.keycloak.resources | nindent 12 }}
+      {{- if .Values.keycloak.realmImport.enabled }}
+      volumes:
+        - name: realm-source
+          configMap:
+            name: dashboard-keycloak-realm-raw
+        - name: realm-work
+          emptyDir: {}
+      {{- end }}
+{{- end }}

@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-frontend-apache-conf
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+data:
+  server.conf: "<VirtualHost *:80>\n    ServerName localhost\n    DocumentRoot /var/www/html/openVRE/public/\n\
+    \    DirectoryIndex index.php\n    <Directory \"/var/www/html/openVRE/public/api\"\
+    >\n        AllowOverride All\n        Require all granted\n    </Directory>\n\
+    \    ProxyPass \"/auth\" \"http://dashboard-keycloak.bsctre-v2.svc.cluster.local:8080/auth\"\
+    \n    ProxyPassReverse \"/auth\" \"http://dashboard-keycloak.bsctre-v2.svc.cluster.local:8080/auth\"\
+    \n    RewriteEngine on\n    RewriteRule ^/interactive-tool/([^/]+)/?(.*) https://$1:8090/$2\
+    \ [P,L]\n    ErrorLog /var/log/apache/vre-error.log\n    CustomLog /var/log/apache/vre.log\
+    \ combined\n</VirtualHost>\n"

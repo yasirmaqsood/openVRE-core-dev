@@ -1,0 +1,11 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: dashboard-postgres
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: dashboard-postgres

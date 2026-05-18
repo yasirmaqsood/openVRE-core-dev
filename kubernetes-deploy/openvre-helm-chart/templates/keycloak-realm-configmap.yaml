@@ -1,0 +1,11 @@
+{{- if and .Values.components.keycloak.enabled .Values.keycloak.realmImport.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-keycloak-realm-raw
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+data:
+  realm-sample.json: |
+{{ .Files.Get "files/keycloak/realm-sample.json" | nindent 4 }}
+{{- end }}

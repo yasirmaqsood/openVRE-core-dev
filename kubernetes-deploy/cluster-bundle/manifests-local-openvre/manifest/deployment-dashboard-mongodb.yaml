@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard-mongodb
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dashboard-mongodb
+  template:
+    metadata:
+      labels:
+        app: dashboard-mongodb
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: dashboard-mongodb
+        image: mongo:8.0
+        args:
+        - mongod
+        - --bind_ip_all
+        - --tlsMode=disabled
+        ports:
+        - containerPort: 27017
+        envFrom:
+        - secretRef:
+            name: dashboard-mongodb-password
+        - configMapRef:
+            name: dashboard-mongodb-env
+        env:
+        - name: MONGO_PORT
+          value: '27017'
+        resources:
+          limits:
+            cpu: 300m
+            memory: 1Gi
+          requests:
+            cpu: 100m
+            memory: 512Mi
+        volumeMounts:
+        - name: conf-configmap
+          mountPath: /etc/mongo/mongod.conf
+          subPath: mongod.conf
+        - name: init-sh-configmap
+          mountPath: /docker-entrypoint-initdb.d/
+        - name: init-documents-configmap
+          mountPath: /init_documents
+        - name: data
+          mountPath: /data/db
+      volumes:
+      - name: conf-configmap
+        configMap:
+          name: dashboard-mongodb-conf
+          items:
+          - key: mongod.conf
+            path: mongod.conf
+      - name: init-sh-configmap
+        configMap:
+          name: dashboard-mongodb-init-sh
+          defaultMode: 493
+      - name: init-documents-configmap
+        configMap:
+          name: dashboard-mongodb-init-documents
+      - name: data
+        persistentVolumeClaim:
+          claimName: dashboard-mongodb-data

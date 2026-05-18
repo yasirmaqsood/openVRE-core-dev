@@ -1,0 +1,53 @@
+===========================================================
+  OpenVRE has been deployed!
+===========================================================
+
+Namespace : {{ .Release.Namespace }}
+Release   : {{ .Release.Name }}
+
+{{- if .Values.frontend.ingress.enabled }}
+
+Access the application:
+{{- if .Values.domain.host }}
+  URL: {{ if .Values.domain.tlsEnabled }}https{{ else }}http{{ end }}://{{ .Values.domain.host }}
+{{- else }}
+  No domain configured. Get the Ingress IP with:
+    kubectl get ingress -n {{ .Release.Namespace }}
+{{- end }}
+{{- else }}
+
+Port-forward to access the frontend:
+  kubectl port-forward svc/dashboard-frontend {{ .Values.frontend.service.port }}:{{ .Values.frontend.service.port }} -n {{ .Release.Namespace }}
+  Then open http://localhost:{{ .Values.frontend.service.port }}
+{{- end }}
+
+{{- if .Values.components.keycloak.enabled }}
+
+Keycloak admin console (internal):
+  kubectl port-forward svc/dashboard-keycloak {{ .Values.keycloak.service.port }}:{{ .Values.keycloak.service.port }} -n {{ .Release.Namespace }}
+  Then open http://localhost:{{ .Values.keycloak.service.port }}/auth
+  Admin user    : {{ .Values.secrets.keycloak.adminUser }}
+  Admin password: (from your values file — secrets.keycloak.adminPassword)
+{{- end }}
+
+{{- if .Values.components.dashboardMongo.enabled }}
+
+MongoDB:
+  kubectl port-forward svc/dashboard-mongodb {{ .Values.dashboardMongo.service.port }}:{{ .Values.dashboardMongo.service.port }} -n {{ .Release.Namespace }}
+  mongosh --host localhost --port {{ .Values.dashboardMongo.service.port }} -u <user> -p <pass>
+{{- end }}
+
+IMPORTANT — before first use:
+{{- if .Values.keycloak.realmImport.enabled }}
+  1. (Realm import is enabled.) Ensure secrets.frontend.keycloakSecret matches the
+     patched secret for client "{{ .Values.keycloak.realmImport.oidcClientId }}".
+{{- else }}
+  1. Create a Keycloak client named "{{ .Values.frontend.env.keycloakClient }}" and
+     set secrets.frontend.keycloakSecret to the client secret.
+{{- end }}
+  2. Create at least one Keycloak user in the "{{ .Values.keycloak.realm }}" realm.
+{{- if and .Values.dashboardMongo.initDocuments.enabled .Values.dashboardMongo.initDocuments.useBundledDefaults }}
+  3. MongoDB tool metadata is seeded from bundled JSON on first empty volume (see README).
+{{- else }}
+  3. Populate MongoDB with tool definitions (see README.md).
+{{- end }}

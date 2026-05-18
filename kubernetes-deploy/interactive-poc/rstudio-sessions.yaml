@@ -1,0 +1,173 @@
+# PoC: two RStudio sessions — each gets its own hostname via ingress-nginx (no Apache proxy).
+#
+# On your laptop VM, add to /etc/hosts (replace IP if needed):
+#   192.168.0.226  rstudio-1.openvre.local rstudio-2.openvre.local
+#
+# Open in browser:
+#   http://rstudio-1.openvre.local:30080/   (user: rstudio, password: openvre)
+#   http://rstudio-2.openvre.local:30080/
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openvre-ix-rstudio-1
+  namespace: bsctre-v2
+  labels:
+    app.kubernetes.io/part-of: openvre-interactive
+    openvre.io/session: rstudio-1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openvre-ix-rstudio-1
+  template:
+    metadata:
+      labels:
+        app: openvre-ix-rstudio-1
+        openvre.io/session: rstudio-1
+    spec:
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: rstudio
+          image: rocker/rstudio:4.4.2
+          ports:
+            - containerPort: 8787
+          env:
+            - name: PASSWORD
+              value: openvre
+            - name: DISABLE_SECURE_COOKIES
+              value: "true"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              cpu: 500m
+              memory: 1536Mi
+          volumeMounts:
+            - name: shared
+              mountPath: /home/rstudio/workspace
+      volumes:
+        - name: shared
+          persistentVolumeClaim:
+            claimName: dashboard-frontend-sgecore-shareddata
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openvre-ix-rstudio-1
+  namespace: bsctre-v2
+spec:
+  selector:
+    app: openvre-ix-rstudio-1
+  ports:
+    - name: http
+      port: 8787
+      targetPort: 8787
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: openvre-ix-rstudio-1
+  namespace: bsctre-v2
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: rstudio-1.openvre.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: openvre-ix-rstudio-1
+                port:
+                  number: 8787
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openvre-ix-rstudio-2
+  namespace: bsctre-v2
+  labels:
+    app.kubernetes.io/part-of: openvre-interactive
+    openvre.io/session: rstudio-2
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openvre-ix-rstudio-2
+  template:
+    metadata:
+      labels:
+        app: openvre-ix-rstudio-2
+        openvre.io/session: rstudio-2
+    spec:
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: rstudio
+          image: rocker/rstudio:4.4.2
+          ports:
+            - containerPort: 8787
+          env:
+            - name: PASSWORD
+              value: openvre
+            - name: DISABLE_SECURE_COOKIES
+              value: "true"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              cpu: 500m
+              memory: 1536Mi
+          volumeMounts:
+            - name: shared
+              mountPath: /home/rstudio/workspace
+      volumes:
+        - name: shared
+          persistentVolumeClaim:
+            claimName: dashboard-frontend-sgecore-shareddata
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openvre-ix-rstudio-2
+  namespace: bsctre-v2
+spec:
+  selector:
+    app: openvre-ix-rstudio-2
+  ports:
+    - name: http
+      port: 8787
+      targetPort: 8787
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: openvre-ix-rstudio-2
+  namespace: bsctre-v2
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: rstudio-2.openvre.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: openvre-ix-rstudio-2
+                port:
+                  number: 8787
