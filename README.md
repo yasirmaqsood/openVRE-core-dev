@@ -2,6 +2,11 @@
 
 Per-session interactive pods **plus** OpenVRE authorization: only the logged-in owner can open a session URL; **no RStudio password** (gateway signs in server-side).
 
+
+## Before you install
+
+Complete **[kubernetes-deploy/openvre-helm-chart/GETTING_STARTED.md](kubernetes-deploy/openvre-helm-chart/GETTING_STARTED.md)** (Sections 2, 4, 5, 7, 8, 9), then **[kubernetes-deploy/INTERACTIVE.md](kubernetes-deploy/INTERACTIVE.md)** for auth.
+
 ## Start here
 
 | Doc | Purpose |

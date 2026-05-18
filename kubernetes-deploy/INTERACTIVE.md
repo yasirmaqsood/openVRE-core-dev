@@ -1,5 +1,7 @@
 # Interactive tools — with OpenVRE auth
 
+> **Prerequisites:** Complete [openvre-helm-chart/GETTING_STARTED.md](openvre-helm-chart/GETTING_STARTED.md) Sections **2**, **4**, **8**, **5–7**, **9** before interactive + auth setup.
+
 Branch: **`kubernetes-interactive-pod-with-auth`**
 
 Same per-session pods as the pods-only branch, plus:
