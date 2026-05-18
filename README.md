@@ -4,6 +4,11 @@ Backup / full-deploy branch: **batch Kubernetes** OpenVRE PHP (same as `kubernet
 
 Use this branch to reproduce a full stack install without interactive-session PHP.
 
+
+## Before you install
+
+Use **[kubernetes-deploy/openvre-helm-chart/GETTING_STARTED.md](kubernetes-deploy/openvre-helm-chart/GETTING_STARTED.md)** — Sections **2**, **4**, **8**, **5–9** (prerequisites, storage, ingress, install, Keycloak, Mongo).
+
 ## Start here
 
 | Doc | Purpose |
