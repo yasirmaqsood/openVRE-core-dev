@@ -1,20 +1,33 @@
+# OpenVRE — branch `kubernetes-interactive-pod-with-auth`
 
-# Open Virtual Research Environment core development (openVRE-core-dev)
+Per-session interactive pods **plus** OpenVRE authorization: only the logged-in owner can open a session URL; **no RStudio password** (gateway signs in server-side).
 
-OpenVRE (Open Virtual Research Environment) is an open-source, cloud-based platform designed to facilitate the creation, 
-management and customization of Virtual Research Environments (VREs). OpenVRE bridges the gap between HPC resources, 
-sensitive data infrastructures and analytical tools and workflows, providing a flexible environment that enables secure 
-data access, scalable computation and collaboration.
+## Start here
 
-This repository contains the source code for the openVRE core development version, which includes the core components of
-the platform. Other software pieces as the tools, visualizers and data are specific to the each openVRE deployment.
+| Doc | Purpose |
+|-----|---------|
+| [kubernetes-deploy/openvre-helm-chart/GETTING_STARTED.md](./kubernetes-deploy/openvre-helm-chart/GETTING_STARTED.md) | Install cluster from scratch |
+| [kubernetes-deploy/openvre-helm-chart/README.md](./kubernetes-deploy/openvre-helm-chart/README.md) | Chart reference |
+| [kubernetes-deploy/INTERACTIVE.md](./kubernetes-deploy/INTERACTIVE.md) | Interactive + auth (this variant) |
+| [kubernetes-deploy/README.md](./kubernetes-deploy/README.md) | Deploy bundle layout |
 
-A production-ready version of openVRE can be found in the [openVRE](https://github.com/inab/openVRE) repository. It also
-includes a complete documentation of the platform at the respository [wiki](https://github.com/inab/openVRE/wiki).
+## Extra PHP (vs `kubernetes-interactive-pod`)
 
-⚠️ This documentation is a work in progress and may not correspond with the production version repository documentation.
+| File | Role |
+|------|------|
+| `front_end/openVRE/public/applib/interactiveAuth.php` | Ingress `auth-url` |
+| `front_end/openVRE/public/applib/interactiveGateway.php` | Auto RStudio login |
+| `front_end/openVRE/public/applib/interactiveLoginStart.php` | Sign-in with return URL |
+| `front_end/openVRE/public/applib/loginToken.php` | OAuth return to session |
+| `front_end/openVRE/public/phplib/funclib.inc.php` | `sanitizeInteractiveUserPath()` |
 
-For installation, check the [Install](https://github.com/inab/openVRE-core-dev/tree/master/Install.md) documentation. 
+`Tooljob.php` / `actions-home.js` use `/applib/interactiveGateway.php?path=...`.
 
-After the installation is complete, you can access the platform at the following URL: [http://localhost:8088](http://localhost:8088).
+## Helm
 
+Set `interactive.openvreAuth.enabled: true` in `kubernetes-deploy/openvre-helm-chart/values.yaml`.
+
+## Related branches
+
+- **`kubernetes`** — batch only
+- **`kubernetes-interactive-pod`** — pods without OpenVRE auth on URLs

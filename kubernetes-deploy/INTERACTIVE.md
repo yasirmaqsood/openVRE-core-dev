@@ -1,154 +1,83 @@
-# Interactive tools on Kubernetes (path-based URLs)
+# Interactive tools — with OpenVRE auth
 
-This tree extends **bsc-tre-copy** with automatic interactive sessions (e.g. RStudio) launched from the OpenVRE UI.
+Branch: **`kubernetes-interactive-pod-with-auth`**
 
-Original trees are unchanged:
+Same per-session pods as the pods-only branch, plus:
 
-- `k8s-deployments/bsc-tre-copy`
-- `openvre-dev-kubernetes`
+- **Ingress `auth-url`** → `front_end/.../applib/interactiveAuth.php`
+- **Gateway** → `interactiveGateway.php` (server-side RStudio sign-in)
+- **Sign-in redirect** → `interactiveLoginStart.php`
+
+RStudio pods run with **`DISABLE_AUTH=true`**; the owner does not type an RStudio password.
 
 ## URL pattern
 
-After a user launches an interactive tool on site **local** (`job_manager: kubernetes_native`):
+Workspace link (UI):
 
 ```text
-http://<your-public-ip>/<sanitized-user-id>/<session-id>/
+http://<host>/applib/interactiveGateway.php?path=/<user>/<session>
 ```
 
-Example:
+After gateway + auth, user lands on:
 
 ```text
-http://212.128.227.180/BSC_TRE_john_doe/rstudio-a1b2c3d4/
+http://<host>/<user>/<session>/
 ```
 
-Each launch creates:
+## Components (this repo)
 
-- Deployment + Service + ConfigMap (`rserver.conf` with `www-root-path`)
-- Ingress path on **ingress-nginx** (same IP as OpenVRE)
+| Component | Path |
+|-----------|------|
+| Scheduler | `kubernetes-deploy/scheduler/app.py` |
+| PHP launcher | `ProcessK8sInteractive.php` |
+| Auth / gateway | `applib/interactiveAuth.php`, `interactiveGateway.php`, `interactiveLoginStart.php` |
+| Helm | `kubernetes-deploy/openvre-helm-chart/` |
 
-Apache **does not** proxy interactive traffic when `interactive.disableLegacyApacheProxy: true`.
+## Helm values
 
-## What changed
+```yaml
+interactive:
+  openvreAuth:
+    enabled: true
+    authUrl: "http://dashboard-frontend.YOUR_NS.svc.cluster.local/applib/interactiveAuth.php"
+    signInUrl: "http://YOUR_PUBLIC_HOST/applib/interactiveLoginStart.php"
+```
 
-| Component | Location |
-|-----------|----------|
-| Scheduler API `POST /interactive-sessions` | `scheduler/app.py` |
-| PHP session launcher | `openvre-dev-kubernetes-interactive/.../ProcessK8sInteractive.php` |
-| Tool launch / workspace link | `Tooljob.php`, `processJob.inc.php`, `projects.inc.php`, `actions-home.js` |
-| Helm RBAC + values | `openvre-helm-chart/templates/scheduler.yaml`, `values.yaml` |
-| RStudio tool files | `openvre-helm-chart/files/tools/rstudio/` |
+Scheduler receives `OPENVRE_INTERACTIVE_AUTH_URL` and `OPENVRE_INTERACTIVE_AUTH_SIGNIN` when enabled in the chart.
 
 ## Build and deploy
 
-### 1. Scheduler image
+### 1. Scheduler + frontend images
+
+Same as pods variant; use tags that include this branch’s PHP (gateway + auth files).
+
+### 2. Helm
 
 ```bash
-cd /home/ubuntu/k8s-deployments/bsc-tre-interactive/scheduler
-docker build -t ymaqsoodbsc/openvre-kubernetes:scheduler-1.1-interactive .
-docker push ymaqsoodbsc/openvre-kubernetes:scheduler-1.1-interactive
+cd kubernetes-deploy/openvre-helm-chart
+helm upgrade --install openvre . -f my-values.yaml -n YOUR_NS
 ```
 
-### 2. Frontend image (includes PHP/JS patches)
+Confirm `interactive.openvreAuth.enabled: true` and URLs match your namespace and ingress host.
 
-```bash
-cd /home/ubuntu/openvre-dev-kubernetes-interactive/openVRE-core-dev/front_end
-# Use your existing frontend build/push pipeline, e.g.:
-docker build -t ymaqsoodbsc/openvre-kubernetes:frontend-2.1-interactive .
-docker push ymaqsoodbsc/openvre-kubernetes:frontend-2.1-interactive
-```
+### 3. MongoDB
 
-### 3. Helm upgrade
-
-```bash
-cd /home/ubuntu/k8s-deployments/bsc-tre-interactive/openvre-helm-chart
-# my-values.yaml: domain, secrets, scheduler.authToken, images tags
-
-helm upgrade bsc-tre-v2 . -f my-values.yaml -n bsctre-v2 \
-  --set images.frontend.tag=frontend-2.1-interactive \
-  --set scheduler.image.tag=scheduler-1.1-interactive
-```
-
-### 4. MongoDB — site + tool
-
-Site **local** must have:
-
-```javascript
-db.sites.updateOne(
-  { _id: "local" },
-  { $set: { "launcher.job_manager": "kubernetes_native" } }
-)
-```
-
-Register RStudio tool (see `files/tools/rstudio/mongo-k8s.json`):
-
-```bash
-# paste JSON from mongo-k8s.json into mongosh
-db.tools.replaceOne({ _id: "rstudio" }, <document>, { upsert: true })
-```
-
-Copy tool UI into the frontend tools PVC (or bake into image):
-
-```bash
-kubectl cp files/tools/rstudio/. <ns>/<frontend-pod>:/var/www/html/openVRE/public/tools/rstudio/
-```
+Same as pods variant (`kubernetes_native`, interactive RStudio tool).
 
 ## User flow
 
-1. User opens tool **Rstudio Session** in OpenVRE.
-2. Frontend calls scheduler `POST /interactive-sessions`.
-3. Job appears in workspace as **ACTIVE SESSION**.
-4. **Access Session** opens `/<user-id>/<session-id>/` on the same host (e.g. `212.128.227.180`).
-5. **Stop Session** calls `DELETE /interactive-sessions/{name}`.
+1. Launch RStudio → scheduler creates pod + ingress (with auth annotations).
+2. **Access Session** → `interactiveGateway.php` (must be logged into OpenVRE).
+3. Gateway validates user, signs in to RStudio internally, redirects to session path.
+4. Further requests to `/<user>/<session>/` pass ingress auth (`interactiveAuth.php`).
+5. **Stop Session** deletes K8s resources via scheduler.
 
-## Auth (later)
+## Compare variants
 
-Session URLs are reachable without OpenVRE login today. Options for later:
+| | `kubernetes-interactive-pod` | This branch |
+|--|------------------------------|-------------|
+| OpenVRE login on URL | No | Yes |
+| RStudio login | No (`DISABLE_AUTH`) | No (gateway) |
+| `applib/interactive*.php` | No | Yes |
 
-- ingress-nginx `auth-url` / OAuth2 proxy
-- NetworkPolicy + internal-only Services
-- Short-lived signed tokens in query string
-
-## Quick test without full image rebuild
-
-On an existing cluster, patch scheduler ConfigMap and RBAC:
-
-```bash
-kubectl apply -f - <<'EOF'
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: scheduler
-  namespace: bsctre-v2
-rules:
-  - apiGroups: ["batch"]
-    resources: ["jobs"]
-    verbs: ["create", "get", "list", "delete"]
-  - apiGroups: [""]
-    resources: ["pods", "services", "configmaps"]
-    verbs: ["create", "get", "list", "delete"]
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["create", "get", "list", "delete"]
-  - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses"]
-    verbs: ["create", "get", "list", "delete"]
-EOF
-
-kubectl create configmap scheduler-app \
-  --from-file=app.py=/home/ubuntu/k8s-deployments/bsc-tre-interactive/scheduler/app.py \
-  -n bsctre-v2 --dry-run=client -o yaml | kubectl apply -f -
-
-kubectl rollout restart deployment/scheduler -n bsctre-v2
-```
-
-Test API:
-
-```bash
-TOKEN=$(kubectl get secret scheduler-auth -n bsctre-v2 -o jsonpath='{.data.token}' | base64 -d)
-curl -s -X POST http://scheduler.bsctre-v2.svc.cluster.local:8080/interactive-sessions \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"namespace":"bsctre-v2","user_id":"testuser","session_id":"rstudio-demo1","image":"rocker/rstudio:4.4.2"}'
-```
-
-Then open: `http://212.128.227.180/testuser/rstudio-demo1/` (password `openvre`).
+See also [../README.md](../README.md) (repo root).

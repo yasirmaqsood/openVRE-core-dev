@@ -1,68 +1,66 @@
-# OpenVRE Scheduler Image
+# OpenVRE Scheduler
 
-This folder contains the standalone scheduler service that the OpenVRE frontend calls to create, inspect, and delete Kubernetes `batch/v1` Jobs.
+Standalone service the OpenVRE frontend calls for Kubernetes workloads.
 
-The Helm chart now uses the published scheduler image by default:
-
-```text
-ymaqsoodbsc/openvre-kubernetes:scheduler-1.0
-```
+On branch **`kubernetes-interactive-pod`** / **`kubernetes-interactive-pod-with-auth`**, `app.py` also manages **interactive sessions** (Deployments, Services, Ingresses).
 
 ## Build
 
-From `k8s-deployments/bsc-tre-copy`:
+From repo root:
 
 ```bash
-docker build -t ymaqsoodbsc/openvre-kubernetes:scheduler-1.0 ./scheduler
+docker build -t <registry>/openvre-kubernetes:scheduler-interactive kubernetes-deploy/scheduler
+docker push <registry>/openvre-kubernetes:scheduler-interactive
 ```
 
-Or with a registry:
-
-```bash
-docker build -t <registry>/openvre-kubernetes:scheduler-1.0 ./scheduler
-docker push <registry>/openvre-kubernetes:scheduler-1.0
-```
-
-## Runtime configuration
-
-The scheduler expects to run inside Kubernetes with a mounted ServiceAccount token. It reads:
+## Runtime environment
 
 | Variable | Purpose |
-|---|---|
-| `DEFAULT_NAMESPACE` | Namespace where Jobs are created if the request does not specify one. |
-| `SCHEDULER_AUTH_TOKEN` | Bearer token required from the frontend. |
-| `KUBERNETES_SERVICE_HOST` | Set automatically by Kubernetes. |
-| `KUBERNETES_SERVICE_PORT` | Set automatically by Kubernetes. |
+|----------|---------|
+| `DEFAULT_NAMESPACE` | Namespace for Jobs / interactive resources |
+| `SCHEDULER_AUTH_TOKEN` | Bearer token required from frontend |
+| `OPENVRE_INTERACTIVE_AUTH_URL` | **Auth branch only** — ingress `auth-url` |
+| `OPENVRE_INTERACTIVE_AUTH_SIGNIN` | **Auth branch only** — ingress `auth-signin` |
 
-It also reads the standard ServiceAccount files:
-
-```text
-/var/run/secrets/kubernetes.io/serviceaccount/token
-/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-```
-
-## API
+## API — batch jobs
 
 | Method | Path | Description |
-|---|---|---|
-| `GET` | `/healthz` | Health check, no auth required. |
-| `POST` | `/jobs` | Create a Kubernetes Job from a YAML manifest. |
-| `GET` | `/jobs/<name>?namespace=<namespace>` | Read a Job. |
-| `DELETE` | `/jobs/<name>?namespace=<namespace>` | Delete a Job. |
+|--------|------|-------------|
+| `GET` | `/healthz` | Health check (no auth) |
+| `POST` | `/jobs` | Create a Kubernetes Job |
+| `GET` | `/jobs/<name>?namespace=` | Get Job |
+| `DELETE` | `/jobs/<name>?namespace=` | Delete Job |
 
-All `/jobs` endpoints require:
+## API — interactive sessions
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/interactive-sessions` | Create Deployment + Service + Ingress + ConfigMap |
+| `GET` | `/interactive-sessions/<name>?namespace=` | Session status |
+| `DELETE` | `/interactive-sessions/<name>?namespace=` | Tear down all session resources |
+
+All endpoints except `/healthz` require:
 
 ```text
 Authorization: Bearer <SCHEDULER_AUTH_TOKEN>
 ```
 
-## Helm integration
+## Pods vs auth
 
-The chart runs this image directly. It no longer mounts scheduler code from the `scheduler-app` ConfigMap.
+| | Pods branch | Auth branch |
+|--|-------------|-------------|
+| `DISABLE_AUTH` on RStudio pod | Yes | Yes |
+| Ingress `auth-url` | No | Yes (when env set) |
+
+See [../INTERACTIVE.md](../INTERACTIVE.md).
+
+## Helm
 
 ```yaml
 scheduler:
   image:
     repository: ymaqsoodbsc/openvre-kubernetes
-    tag: "scheduler-1.0"
+    tag: scheduler-interactive
 ```
+
+Chart templates: `../openvre-helm-chart/templates/scheduler.yaml`.
