@@ -1,0 +1,104 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-mongodb-init-documents
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+data:
+  data_types.json: "[\n  {\n    \"_id\": \"data_manifest\",\n    \"name\": \"data_manifest\",\n    \"file_types\": [\n   \
+    \   \"JSON\"\n    ]\n  },\n  {\n    \"_id\": \"data_quality_report\",\n    \"name\": \"data_quality_report\",\n    \"\
+    file_types\": [\n      \"JSON\"\n    ]\n  },\n  {\n    \"_id\": \"FE_Query\",\n    \"name\": \"FE_Query\",\n    \"file_types\"\
+    : [\n      \"JSON\"\n    ]\n  },\n  {\n    \"_id\": \"dataset_reference\",\n    \"name\": \"dataset_reference\",\n   \
+    \ \"file_types\": [\n      \"JSON\"\n    ]\n  },\n  {\n    \"_id\": \"dataset_id\",\n    \"name\": \"Dataset Id\",\n \
+    \   \"file_types\": [\n      \"JSON\"\n    ]\n  },\n  {\n    \"_id\": \"FLCore_parameters\",\n    \"name\": \"FLCore_parameters\"\
+    ,\n    \"file_types\": [\n      \"YAML\"\n    ]\n  },\n  {\n    \"_id\": \"FE_query\",\n    \"name\": \"FE_query\",\n\
+    \    \"file_types\": [\n      \"JSON\"\n    ]\n  },\n  {\n    \"_id\": \"sequence_data\",\n    \"name\": \"sequence_data\"\
+    ,\n    \"file_types\": [\n      \"FASTA\"\n    ]\n  },\n  {\n    \"_id\": \"3d_simulation\",\n    \"name\": \"3D Simulation\"\
+    ,\n    \"file_types\": [\n      \"PTH\",\n      \"OBJ\",\n      \"STL\"\n    ],\n    \"assembly\": []\n  },\n  {\n   \
+    \ \"_id\": \"tool_statistics\",\n    \"name\": \"Tool summary file\",\n    \"file_types\": [\n      \"TAR\"\n    ],\n\
+    \    \"taxon_id\": false,\n    \"assembly\": []\n  },\n  {\n    \"_id\": \"site_manifest\",\n    \"name\": \"site_manifest\"\
+    ,\n    \"file_types\": [\n      \"JSON\"\n    ]\n  },\n  {\n    \"_id\": \"sequence_data\",\n    \"name\": \"sequence_data\"\
+    ,\n    \"file_types\": [\n      \"FASTA\"\n    ]\n  },\n  {\n    \"_id\": \"id_list\",\n    \"name\": \"id_list\",\n \
+    \   \"file_types\": [\n      \"TXT\"\n    ]\n  }\n]"
+  file_types.json: "[\n    {\n        \"_id\": \"CSV\",\n        \"extension\": [\n            \"CSV\"\n        ]\n    },\n\
+    \    {\n        \"_id\": \"TSV\",\n        \"extension\": [\n            \"TSV\"\n        ]\n    },\n    {\n        \"\
+    _id\": \"FASTA\",\n        \"extension\": [\n            \"FASTA\",\n            \"FA\",\n            \"FN\"\n       \
+    \ ]\n    },\n    {\n        \"_id\": \"YAML\",\n        \"extension\": [\n            \"yml\",\n            \"yaml\"\n\
+    \        ]\n    },\n    {\n        \"_id\": \"PTH\",\n        \"extension\": [\n            \"PTH\"\n        ]\n    },\n\
+    \    {\n        \"_id\": \"OBJ\",\n        \"extension\": [\n            \"OBJ\",\n            \"STL\"\n        ]\n  \
+    \  },\n    {\n        \"_id\": \"JSON\",\n        \"extension\": [\n            \"json\"\n        ]\n    },\n    {\n \
+    \       \"_id\": \"TXT\",\n        \"extension\": [\n            \"TXT\",\n            \"LOG\"\n        ]\n    },\n  \
+    \  {\n        \"_id\": \"DIR\",\n        \"extension\": [\n            \"\"\n        ]\n    },\n    {\n        \"_id\"\
+    : \"TAR\",\n        \"extension\": [\n            \"TAR\",\n            \"TGZ\",\n            \"TBZ\",\n            \"\
+    TBZ2\"\n        ]\n    },\n    {\n        \"_id\": \"STL\",\n        \"extension\": [\n            \"STL\"\n        ]\n\
+    \    }\n]"
+  sampleData.json: "[\n    {\n        \"_id\": \"basic\",\n        \"name\": \"Basic\",\n        \"sample_path\": \"basic/\"\
+    ,\n        \"status\": {\n            \"$numberInt\": \"0\"\n        },\n        \"short_description\": \"Basic sample\
+    \ data, used new accounts\"\n    }\n]"
+  sites.json: "[\n    {\n        \"_id\": \"local\",\n        \"name\": \"Local Docker Infrastructure\",\n        \"type\"\
+    : 2,\n        \"launcher\": {\n            \"accessible_via\": null,\n            \"job_manager\": \"docker_SGE\",\n \
+    \           \"container\": \"Docker\"\n        }\n    },\n    {\n        \"_id\": \"marenostrum\",\n        \"name\":\
+    \ \"MareNostrum HPC Infrastructure\",\n        \"type\": 2,\n        \"launcher\": {\n          \"accessible_via\": \"\
+    SSH\",\n          \"job_manager\": \"Slurm_Singularity\",\n          \"access_credentials\": {\n            \"username\"\
+    : null,\n            \"private_key\": null,\n            \"public_key\": null,\n            \"server\": \"glogin1\",\n\
+    \            \"rootpath_default\": \"\",\n            \"domain\": \"\"\n          },\n          \"partition\": \"\",\n\
+    \          \"cpu_count\": 4,\n          \"cpu_percent\": 100,\n          \"gpu_count\": 0,\n          \"memory\": {\n\
+    \            \"virtual\": 16,\n            \"available\": 16,\n            \"total\": 16\n          },\n          \"outbound_connectivity\"\
+    : true,\n          \"queue_name\": \"gp_bscls\"\n        },\n        \"sigla\": \"MN\"\n      }\n]"
+  tools.json: "[\n  {\n    \"_id\": \"tool_skeleton\",\n    \"name\": \"Tool Skeleton\",\n    \"title\": \"Tool Skeleton Template\"\
+    ,\n    \"short_description\": \"Skeleton for a VRE tool definition\",\n    \"long_description\": \"This a a longer description\
+    \ on what this tool is about: a dummy application for demonstration purposes only.\",\n    \"url\": \"https://github.com/tool_skelon/VREwrapping\"\
+    ,\n    \"publication\": \"10.00000/if-any\",\n    \"owner\": {\n      \"author\": \"Your Name\",\n      \"institution\"\
+    : \"Your institution\",\n      \"contact\": \"Your email account\"\n    },\n    \"status\": 1,\n    \"external\": false,\n\
+    \    \"keywords\": [\n      \"next gen seq\",\n      \"dna\"\n    ],\n    \"keywords_tool\": [\n      \"Tool skeleton\"\
+    ,\n      \"Sample keyword\"\n    ],\n    \"infrastructure\": {\n      \"memory\": 12,\n      \"cpus\": 1,\n      \"executable\"\
+    : \"/home/vre_template_tool/VRE_RUNNER\",\n      \"container_image\": \"dockerhub/tool-skeleton:latest\",\n      \"clouds\"\
+    : {\n        \"local\": {\n          \"launcher\": \"docker_SGE\",\n          \"default_cloud\": true,\n          \"queue\"\
+    : \"testq\",\n          \"executable\": \"/home/vre_template_tool/VRE_RUNNER\",\n          \"executable_type\": \"docker\"\
+    \n        }\n      }\n    },\n    \"input_files\": [\n      {\n        \"name\": \"fasta1\",\n        \"description\"\
+    : \"FASTA input file 1\",\n        \"help\": \"This is the input file 1 help tooltip\",\n        \"file_type\": [\n  \
+    \        \"FASTA\"\n        ],\n        \"data_type\": [\n          \"dna_sequence\"\n        ],\n        \"required\"\
+    : true,\n        \"allow_multiple\": false\n      },\n      {\n        \"name\": \"fasta2\",\n        \"description\"\
+    : \"FASTA input file 2\",\n        \"help\": \"This is the input file 2 help tooltip\",\n        \"file_type\": [\n  \
+    \        \"FASTA\"\n        ],\n        \"data_type\": [\n          \"dna_sequence\"\n        ],\n        \"required\"\
+    : false,\n        \"allow_multiple\": false\n      }\n    ],\n    \"input_files_combinations\": [\n      {\n        \"\
+    description\": \"Start tool with 1 FASTA FILE\",\n        \"input_files\": [\n          \"fasta1\"\n        ]\n      },\n\
+    \      {\n        \"description\": \"Start tool with 2 FASTA FILES\",\n        \"input_files\": [\n          \"fasta1\"\
+    ,\n          \"fasta2\"\n        ]\n      }\n    ],\n    \"input_files_combinations_internal\": [\n      [\n        {\n\
+    \          \"dna_sequence\": 1\n        },\n        {\n          \"dna_sequence\": 1\n        }\n      ],\n      [\n \
+    \       {\n          \"dna_sequence\": 1\n        }\n      ]\n    ],\n    \"arguments\": [\n      {\n        \"name\"\
+    : \"1_arg_boolean\",\n        \"description\": \"Argument 1 Boolean\",\n        \"help\": \" Tooltip for this argument\"\
+    ,\n        \"type\": \"boolean\",\n        \"default\": \"false\"\n      },\n      {\n        \"name\": \"2_arg_enum_mult\"\
+    ,\n        \"description\": \"Argument 2 Enum Multiple\",\n        \"help\": \" Tooltip for this argument\",\n       \
+    \ \"type\": \"enum_multiple\",\n        \"enum_items\": {\n          \"name\": [\n            \"option 1 name\",\n   \
+    \         \"option 2 name\"\n          ],\n          \"description\": [\n            \"option1\",\n            \"option2\"\
+    \n          ]\n        },\n        \"required\": true,\n        \"default\": \"\"\n      },\n      {\n        \"name\"\
+    : \"3_arg_integer\",\n        \"description\": \"Argument 3 Integer\",\n        \"help\": \" Tooltip for this argument\"\
+    ,\n        \"type\": \"integer\",\n        \"minimum\": 1,\n        \"maximum\": 500,\n        \"required\": true,\n \
+    \       \"default\": \"100\"\n      },\n      {\n        \"name\": \"4_arg_string\",\n        \"description\": \"Argument\
+    \ 4 String\",\n        \"help\": \" Tooltip for this argument\",\n        \"type\": \"string\",\n        \"required\"\
+    : true,\n        \"allow_multiple\": false\n      }\n    ],\n    \"has_custom_viewer\": false,\n    \"output_files\":\
+    \ [\n      {\n        \"name\": \"output1\",\n        \"required\": true,\n        \"allow_multiple\": false,\n      \
+    \  \"file\": {\n          \"file_type\": \"FASTA\",\n          \"data_type\": \"dna_sequence\",\n          \"meta_data\"\
+    : {\n            \"visible\": true,\n            \"description\": \"Output File 1 description\"\n          }\n       \
+    \ }\n      }\n    ],\n    \"sites\": [\n      {\n        \"site_id\": \"local\",\n        \"status\": 1\n      }\n   \
+    \ ]\n  },\n  {\n    \"_id\": \"wget\",\n    \"title\": \"Remote file retrieving from URLs\",\n    \"name\": \"Get remote\
+    \ file\",\n    \"short_description\": \"Implementation of a the remote file retriever WGET.\",\n    \"url\": \"https://www.gnu.org/software/wget/\"\
+    ,\n    \"owner\": {\n      \"institution\": \"Barcelona Supercomputing Center\",\n      \"author\": \"Laia Codo\",\n \
+    \     \"contact\": \"laia.codo@bsc.es\",\n      \"url\": \"\",\n      \"user\": \"laia.codo@bsc.es\"\n    },\n    \"external\"\
+    : false,\n    \"keywords\": [],\n    \"infrastructure\": {\n      \"memory\": 2,\n      \"cpus\": 1,\n      \"executable\"\
+    : \"/shared_scripts/download_from_url.sh\",\n      \"clouds\": {\n        \"local\": {\n          \"launcher\": \"SGE\"\
+    ,\n          \"default_cloud\": true,\n          \"queue\": \"local.q\"\n        }\n      }\n    },\n    \"input_files\"\
+    : [],\n    \"arguments\": [\n      {\n        \"name\": \"url\",\n        \"description\": \"URL of the file to be downloaded\"\
+    ,\n        \"help\": \"URL\",\n        \"type\": \"string\",\n        \"required\": true,\n        \"allow_multiple\"\
+    : true\n      },\n      {\n        \"name\": \"output\",\n        \"description\": \"Name of the output file\",\n    \
+    \    \"help\": \"Name of the output file\",\n        \"type\": \"string\",\n        \"allow_multiple\": false,\n     \
+    \   \"default\": \"\"\n      },\n      {\n        \"name\": \"working_dir\",\n        \"description\": \"Temporal dir\"\
+    ,\n        \"help\": \"\",\n        \"type\": \"string\",\n        \"allow_multiple\": false,\n        \"default\": \"\
+    \"\n      },\n      {\n        \"name\": \"untar\",\n        \"description\": \"Untar output file if \",\n        \"help\"\
+    : \"\",\n        \"type\": \"string\",\n        \"allow_multiple\": false,\n        \"default\": \"\"\n      }\n    ],\n\
+    \    \"control_file\": \".summary.json\",\n    \"output_files\": [\n      {\n        \"name\": \"file\",\n        \"required\"\
+    : true,\n        \"allow_multiple\": false,\n        \"file_type\": \"\",\n        \"data_type\": \"\",\n        \"file\"\
+    : {\n          \"meta_data\": {\n            \"validated\": false,\n            \"description\": \"Data imported from\
+    \ URL\",\n            \"tool\": \"wget\",\n            \"visible\": true\n          }\n        }\n      }\n    ]\n  }\n\
+    ]"

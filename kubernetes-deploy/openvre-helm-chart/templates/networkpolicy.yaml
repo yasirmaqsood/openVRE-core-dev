@@ -1,0 +1,210 @@
+{{- if .Values.hardening.networkPolicies.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-ingress
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  podSelector:
+    matchLabels:
+      app: dashboard-frontend
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.frontend.service.port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-egress
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  podSelector:
+    matchLabels:
+      app: dashboard-frontend
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: dashboard-keycloak
+      ports:
+        - protocol: TCP
+          port: {{ .Values.keycloak.service.port }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app: dashboard-mongodb
+      ports:
+        - protocol: TCP
+          port: {{ .Values.dashboardMongo.service.port }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app: dashboard-sgecore
+      ports:
+        - protocol: TCP
+          port: {{ .Values.sgecore.service.port }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app: scheduler
+      ports:
+        - protocol: TCP
+          port: {{ .Values.scheduler.service.port }}
+    - ports:
+        - protocol: TCP
+          port: 443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: keycloak-ingress-egress
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  podSelector:
+    matchLabels:
+      app: dashboard-keycloak
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: dashboard-frontend
+      ports:
+        - protocol: TCP
+          port: {{ .Values.keycloak.service.port }}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: dashboard-postgres
+      ports:
+        - protocol: TCP
+          port: {{ .Values.postgres.service.port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mongodb-ingress
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  podSelector:
+    matchLabels:
+      app: dashboard-mongodb
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: dashboard-frontend
+      ports:
+        - protocol: TCP
+          port: {{ .Values.dashboardMongo.service.port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-ingress
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  podSelector:
+    matchLabels:
+      app: dashboard-postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: dashboard-keycloak
+      ports:
+        - protocol: TCP
+          port: {{ .Values.postgres.service.port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sgecore-ingress
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  podSelector:
+    matchLabels:
+      app: dashboard-sgecore
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: dashboard-frontend
+      ports:
+        - protocol: TCP
+          port: {{ .Values.sgecore.service.port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: scheduler-ingress
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  podSelector:
+    matchLabels:
+      app: scheduler
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: dashboard-frontend
+      ports:
+        - protocol: TCP
+          port: {{ .Values.scheduler.service.port }}
+{{- end }}

@@ -1,0 +1,75 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-frontend-config
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+data:
+  act_qmaster: 'dashboard-sgecore.bsctre-v2
+
+    '
+  globals.inc.php: "<?php\n$GLOBALS['BASEURL'] = \"/\";\n$GLOBALS['AppPrefix'] = \"\
+    BSC_TRE\";\n$GLOBALS['NAME'] = \"BSC TRE\";\n$GLOBALS['SITETITLE'] = \"BSC TRE\
+    \ | Virtual Research Environment\";\n$GLOBALS['TIMEOUT'] = 3600;\n$GLOBALS['FROMNAME']\
+    \ = \"VRE\";\n$GLOBALS['ADMINMAIL'] = \"admin@example.com\";\n$GLOBALS['DISKLIMIT']\
+    \ = 10*1024*1024*1024;\n$GLOBALS['DISKLIMIT_ANON'] = 5*1024*1024*1024;\n$GLOBALS['MAXSIZEUPLOAD']\
+    \ = 4000;\n$GLOBALS['caduca'] = \"182\";\n$GLOBALS['project_default'] = \"MyFirstProject\"\
+    ;\n$GLOBALS['tmpUser_dir'] = \".tmp/\";\n$GLOBALS['sampleData_default'] = \"basic\"\
+    ;\n$GLOBALS['root'] = dirname(__DIR__);\n$GLOBALS['shared'] = \"/shared_data/\"\
+    ;\n$GLOBALS['logFile'] = $GLOBALS['root'].\"/logs/application.log\";\n$GLOBALS['dataDir']\
+    \ = $GLOBALS['shared'].\"userdata/\";\n$GLOBALS['pubDir'] = $GLOBALS['shared'].\"\
+    public/\";\n$GLOBALS['sampleDataPath'] = \"/var/www/html/openVRE/data/sampleData/\"\
+    ;\n$GLOBALS['queueTask'] = \"local.q\";\n$GLOBALS['NETWORK_IP'] = \"172.17.0.1\"\
+    ;\n$GLOBALS['interactive_range_start_port'] = 9001;\n$GLOBALS['max_parallel_independent_tools']\
+    \ = 10;\n$GLOBALS['toolsPath'] = \"/tools/\";\n$GLOBALS['tool_json_schema'] =\
+    \ $GLOBALS['root'].\"/install/data/tool_schemas/tool_specification/tool_schema.json\"\
+    ;\n$GLOBALS['tool_io_json_schema'] = $GLOBALS['root'].\"/install/data/tool_schemas/tool_specification/tool_schema_io.json\"\
+    ;\n$GLOBALS['tool_dev_sample'] = $GLOBALS['root'].\"/install/data/tool_schemas/tool_specification/examples/example.json\"\
+    ;\n$GLOBALS['tool_io_dev_sample'] = $GLOBALS['root'].\"/install/data/tool_schemas/tool_specification/examples/example_io.json\"\
+    ;\n$GLOBALS['compressions'] = array(\n    \"zip\"=>\"ZIP\",\"bz2\"=>\"BZIP2\"\
+    ,\"gz\"=>\"GZIP\",\"tgz\"=>\"TAR,GZIP\",\"tar.gz\"=>\"TAR,GZIP\",\n    \"tbz2\"\
+    =>\"TAR,BZIP2\",\"tar.bz2\"=>\"TAR,BZIP2\",\"tar.Z\"=>\"TAR,ZIP\",\"rar\"=>\"\
+    RAR\",\"tar\"=>\"TAR\"\n);\n$GLOBALS['placeholder_input'] = \"Click right button\
+    \ to select file\";\n$GLOBALS['placeholder_textarea'] = \"Click right button to\
+    \ select file(s)\";\n$GLOBALS['cloud'] = \"local\";\n$GLOBALS['clouds'] = array(\n\
+    \    \"local\" => array(\n        \"http_host\" => \"localhost\",\n        \"\
+    dataDir_fs\" => \"/shared_data/userdata/\",\n        \"pubDir_fs\" => \"/shared_data/public/\"\
+    ,\n        \"dataDir_virtual\" => $GLOBALS['dataDir'],\n        \"pubDir_virtual\"\
+    \ => $GLOBALS['pubDir'],\n        \"dataDir_host\" => getenv('FRONTEND_HOST_PATH').$GLOBALS['dataDir'],\n\
+    \        \"pubDir_host\" => getenv('FRONTEND_HOST_PATH').$GLOBALS['pubDir'],\n\
+    \        \"scriptsDir_host\" => getenv('FRONTEND_HOST_PATH').$GLOBALS['shared'].\"\
+    scripts/\",\n        \"PMESserver_domain\" => \"localhost\",\n        \"PMESserver_port\"\
+    \ => \"80\",\n        \"PMESserver_address\" => \"/\",\n        \"imageTypes\"\
+    \ => array(),\n        \"auth\" => array(\"required\" => False)\n    )\n);\n$GLOBALS['ROLES']\
+    \ = array(\"0\"=>\"Admin\",\"1\"=>\"Tool Dev.\",\"2\"=>\"Common\",\"3\"=>\"Anonymous\"\
+    );\n$GLOBALS['NO_GUEST'] = array(0,1,2,100,101);\n$GLOBALS['PREMIUM'] = array(0,1);\n\
+    $GLOBALS['ADMIN'] = array(0);\n$GLOBALS['TOOLDEV'] = array(1);\n$GLOBALS['ROLES_COLOR']\
+    \ = array(\"0\"=>\"blue\",\"1\"=>\"grey-cascade\",\"2\"=>\"\",100=>\"red-haze\"\
+    ,101=>\"yellow-haze\");\n$GLOBALS['STATES_COLOR'] = array(\"0\"=>\"font-red\"\
+    ,\"1\"=>\"font-green-meadow\",\"2\"=>\"font-blue-steel\",3=>\"font-green-meadow\"\
+    ,4=>\"font-yellow-mint\");\n$GLOBALS['FILE_MSG_COLOR'] = array(\"0\"=>\"note-danger\"\
+    ,\"1\"=>\"note-info\",\"2\"=>\"note-success\",3=>\"note-info\");\n$scheme = \"\
+    http\";\nif (!empty($_SERVER['HTTP_X_FORWARDED_PROTO'])) {\n    $scheme = trim(explode(\"\
+    ,\", $_SERVER['HTTP_X_FORWARDED_PROTO'])[0]);\n} elseif (!empty($_SERVER['HTTPS'])\
+    \ && $_SERVER['HTTPS'] !== \"off\") {\n    $scheme = \"https\";\n}\n$host = !empty($_SERVER['HTTP_HOST'])\
+    \ ? $_SERVER['HTTP_HOST'] : getenv('SERVER_DOMAIN');\n$GLOBALS['auth_required']\
+    \ = True;\n$GLOBALS['authRealm'] = getenv('KEYCLOAK_REALM');\n$authServerInternal\
+    \ = getenv('KEYCLOAK_SERVER');\n$authServerPublic = $scheme . \"://\" . $host\
+    \ . \"/auth\";\n$GLOBALS['authServer'] = $authServerInternal;\n$GLOBALS['urlAuthorize']\
+    \ = $authServerPublic.'/realms/'.$GLOBALS['authRealm'].'/protocol/openid-connect/auth';\n\
+    $GLOBALS['urlAccessToken'] = $authServerInternal.'/realms/'.$GLOBALS['authRealm'].'/protocol/openid-connect/token';\n\
+    $GLOBALS['urlResourceOwnerDetails'] = $authServerInternal.'/realms/'.$GLOBALS['authRealm'].'/protocol/openid-connect/userinfo';\n\
+    $GLOBALS['urlLogout'] = $authServerPublic.'/realms/'.$GLOBALS['authRealm'].'/protocol/openid-connect/logout';\n\
+    $GLOBALS['adminToken'] = $authServerInternal.\"/realms/master/protocol/openid-connect/token\"\
+    ;\n$GLOBALS['adminRealm'] = $authServerInternal.\"/admin/realms/\".$GLOBALS['authRealm'];\n\
+    $GLOBALS['URL'] = $scheme . \"://\" . $host . $GLOBALS['BASEURL'];\n$GLOBALS['URL_login']\
+    \ = $GLOBALS['URL'].\"login.php\";\n$GLOBALS['htmlPath'] = $GLOBALS['root'].\"\
+    /public/\";\n$GLOBALS['htmlib'] = $GLOBALS['htmlPath'].\"htmlib\";\n$GLOBALS['appsDir']\
+    \ = $GLOBALS['shared'].\"apps/soft/\";\n$GLOBALS['internalTools'] = $GLOBALS['shared'].\"\
+    apps/internalTools/\";\n$GLOBALS['tool_submission_file'] = \".submit\";\n$GLOBALS['tool_config_file']\
+    \ = \".config.json\";\n$GLOBALS['tool_log_file'] = \".tool.log\";\n$GLOBALS['tool_stageout_file']\
+    \ = \".results.json\";\n$GLOBALS['tool_metadata_file'] = \".input_metadata.json\"\
+    ;\n$GLOBALS['timezone'] = \"UTC\";\n$GLOBALS['datetime'] = \"Y.M.dd HH:mm\";\n\
+    $GLOBALS['logs_datetime'] = \"dd.M.Y HH:mm:ss\";\n$GLOBALS['vaultUrl'] = getenv('VAULT_ADDR')\
+    \ . \"/\" . getenv('VAULT_API_VERSION');\n$GLOBALS['vaultRolename'] = getenv('VAULT_ROLENAME');\n\
+    $GLOBALS['secretPath'] = getenv('VAULT_SECRET_PATH');\n"

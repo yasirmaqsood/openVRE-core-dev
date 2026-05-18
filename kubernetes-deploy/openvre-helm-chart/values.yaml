@@ -1,0 +1,259 @@
+# ===========================================================================
+# OpenVRE Helm Chart — values.yaml
+#
+# This file contains the DEFAULT configuration. To deploy, create your own
+# values file (e.g. my-values.yaml) overriding at minimum:
+#   - domain.host
+#   - secrets.*  (all passwords)
+#   - images.frontend / images.sgecore  (your registry)
+#
+# Then install with:
+#   helm install openvre ./openvre -f my-values.yaml -n <namespace> --create-namespace
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Global settings
+# ---------------------------------------------------------------------------
+global:
+  name: openvre
+  environment: production
+
+# ---------------------------------------------------------------------------
+# Ingress / domain
+# ---------------------------------------------------------------------------
+domain:
+  host: ""                      # REQUIRED: set to your domain (e.g. "openvre.example.com")
+  ingressClassName: nginx
+  tlsEnabled: false
+  tlsSecretName: ""             # set if tlsEnabled: true
+
+# ---------------------------------------------------------------------------
+# Component toggles — disable what you don't need
+# ---------------------------------------------------------------------------
+components:
+  frontend:
+    enabled: true
+  keycloak:
+    enabled: true
+  dashboardMongo:
+    enabled: true
+  postgres:
+    enabled: true
+  sgecore:
+    enabled: true
+
+# ---------------------------------------------------------------------------
+# Container images
+# ---------------------------------------------------------------------------
+images:
+  frontend:
+    repository: ymaqsoodbsc/openvre-kubernetes
+    tag: "frontend-2.0"
+  keycloak:
+    repository: quay.io/keycloak/keycloak
+    tag: "15.0.2"
+  dashboardMongo:
+    repository: mongo
+    tag: "8.0"
+  sgecore:
+    repository: ymaqsoodbsc/openvre-kubernetes
+    tag: "sgecore-1.0"
+
+# ---------------------------------------------------------------------------
+# Secrets — CHANGE ALL OF THESE before production deployment
+# ---------------------------------------------------------------------------
+secrets:
+  dashboardMongo:
+    rootUser: mongo_root_user
+    rootPassword: CHANGEME-mongo-root-password
+    appUser: mongo_user
+    appPassword: CHANGEME-mongo-password
+  frontend:
+    keycloakSecret: CHANGEME-keycloak-client-secret
+    mailPass: ""
+  keycloak:
+    adminUser: admin
+    adminPassword: CHANGEME-keycloak-admin-password
+    dbUser: keycloak
+    dbPassword: CHANGEME-postgres-password
+
+# ---------------------------------------------------------------------------
+# MongoDB
+# ---------------------------------------------------------------------------
+dashboardMongo:
+  replicaCount: 1
+  service:
+    port: 27017
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: 300m
+      memory: 1Gi
+  persistence:
+    enabled: true
+    storageClassName: ""        # leave empty to use cluster default
+    accessMode: ReadWriteOnce
+    size: 20Gi
+  env:
+    mainDb: db
+    tlsMode: disabled
+  initDocuments:
+    # When true, Mongo runs the same seed JSON as openVRE-core-dev docker-compose
+    # (files/mongodb-init/*.json). Runs only on first start with an empty data volume.
+    enabled: true
+    useBundledDefaults: true
+    dataTypesJson: "[]"
+    fileTypesJson: "[]"
+    sampleDataJson: "[]"
+    sitesJson: "[]"
+    toolsJson: "[]"
+
+# ---------------------------------------------------------------------------
+# Keycloak (SSO)
+# ---------------------------------------------------------------------------
+keycloak:
+  replicaCount: 1
+  service:
+    port: 8080
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  database:
+    host: dashboard-postgres
+    port: 5432
+    name: keycloak
+    schema: public
+  proxyAddressForwarding: "false"
+  frontendUrl: ""                # optional public URL, e.g. http://openvre.local:30080/auth
+  realm: master
+  # Bundled realm JSON is exported from Keycloak 26 (openVRE-core-dev). Automatic import
+  # via KEYCLOAK_IMPORT on the chart's default Keycloak 15.x image is unreliable / incompatible.
+  # Leave disabled unless you align image + realm format (e.g. upgrade to Keycloak 26 + Quarkus env).
+  realmImport:
+    enabled: false
+    initImage: python:3.11-alpine
+    oidcClientId: open-vre
+
+# ---------------------------------------------------------------------------
+# PostgreSQL (Keycloak backend)
+# ---------------------------------------------------------------------------
+postgres:
+  replicaCount: 1
+  image:
+    repository: postgres
+    tag: "17.3"
+  service:
+    port: 5432
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  persistence:
+    enabled: true
+    storageClassName: ""        # leave empty to use cluster default
+    accessMode: ReadWriteOnce
+    size: 20Gi
+
+# ---------------------------------------------------------------------------
+# Frontend (OpenVRE web application)
+# ---------------------------------------------------------------------------
+frontend:
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 80
+  ingress:
+    enabled: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  sharedData:
+    persistence:
+      enabled: true
+      storageClassName: ""      # leave empty to use cluster default
+      accessMode: ReadWriteOnce
+      size: 20Gi
+  tools:
+    persistence:
+      enabled: true
+      storageClassName: ""      # leave empty to use cluster default
+      accessMode: ReadWriteOnce
+      size: 5Gi
+  env:
+    frontendHostPath: ""
+    keycloakClient: openvre
+    mailHost: ""
+    mailUser: ""
+    vaultApiVersion: v1
+    vaultRoleName: user-role
+    vaultSecretPath: secret/data/
+    openvreK8sSharedPvc: "dashboard-frontend-sgecore-shareddata"
+    openvreK8sToolsPvc: "dashboard-frontend-tools"
+    openvreK8sRunAsUid: "1000"
+    openvreK8sRunAsGid: "1000"
+    openvreK8sJobImage: "ymaqsoodbsc/fem-tool-2-updated:1.0"
+    openvreK8sJobTtl: "120"
+    openvreK8sJobDeadline: "86400"
+
+# ---------------------------------------------------------------------------
+# Scheduler (Kubernetes Job proxy — creates/monitors/deletes tool Jobs)
+# ---------------------------------------------------------------------------
+scheduler:
+  enabled: true
+  image:
+    repository: ymaqsoodbsc/openvre-kubernetes
+    tag: "scheduler-1.0"
+  service:
+    port: 8080
+  authSecretName: scheduler-auth
+  authSecretKey: token
+  authToken: CHANGEME-scheduler-token
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# ---------------------------------------------------------------------------
+# SGE Core (legacy grid engine bridge)
+# ---------------------------------------------------------------------------
+sgecore:
+  replicaCount: 1
+  service:
+    port: 6444
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  dockerGroup: "1002"
+  env:
+    sharedDataUid: "1000"
+    sharedDataGid: "1000"
+
+# ---------------------------------------------------------------------------
+# Hardening
+# ---------------------------------------------------------------------------
+hardening:
+  podDisruptionBudgets:
+    enabled: true
+    minAvailable: 1
+  networkPolicies:
+    enabled: true

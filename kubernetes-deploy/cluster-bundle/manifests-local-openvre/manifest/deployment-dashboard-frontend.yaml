@@ -1,0 +1,120 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard-frontend
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dashboard-frontend
+  template:
+    metadata:
+      labels:
+        app: dashboard-frontend
+    spec:
+      serviceAccountName: dashboard-frontend
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+      - name: dashboard-init-create-shared-folders
+        image: busybox:1.36
+        command:
+        - sh
+        - -c
+        - 'mkdir -p /shared_data/public /shared_data/userdata
+
+          chmod -R 0777 /shared_data/public /shared_data/userdata || true
+
+          '
+        securityContext:
+          runAsUser: 0
+        volumeMounts:
+        - name: frontend-sgecore-shareddata
+          mountPath: /shared_data
+      containers:
+      - name: dashboard-frontend
+        image: docker.io/ymaqsoodbsc/openvre-kubernetes:frontend-1.0
+        securityContext:
+          runAsUser: 0
+          runAsNonRoot: false
+          allowPrivilegeEscalation: false
+        command:
+        - bash
+        - -c
+        - export MONGO_CREDENTIALS="${MONGO_INITDB_USERNAME}:${MONGO_INITDB_PASSWORD}"
+          && /opt/docker/bin/entrypoint.sh supervisord
+        envFrom:
+        - configMapRef:
+            name: dashboard-frontend-env
+        env:
+        - name: KEYCLOAK_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: dashboard-frontend-passwords-secrets
+              key: KEYCLOAK_SECRET
+        - name: MAIL_PASS
+          valueFrom:
+            secretKeyRef:
+              name: dashboard-frontend-passwords-secrets
+              key: MAIL_PASS
+        - name: KEYCLOAK_REALM
+          value: master
+        - name: MONGO_TLS_MODE
+          value: disabled
+        - name: MONGO_MAIN_DB
+          value: db
+        - name: MONGO_INITDB_USERNAME
+          value: mongo_user
+        - name: MONGO_INITDB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: dashboard-mongodb-password
+              key: MONGO_INITDB_PASSWORD
+        resources:
+          limits:
+            cpu: 500m
+            memory: 1Gi
+          requests:
+            cpu: 100m
+            memory: 512Mi
+        volumeMounts:
+        - name: frontend-sgecore-shareddata
+          mountPath: /shared_data
+        - name: frontend-tools
+          mountPath: /var/www/html/openVRE/public/tools
+        - name: conf
+          mountPath: /var/www/html/openVRE/config/globals.inc.php
+          subPath: globals.inc.php
+        - name: conf
+          mountPath: /var/lib/gridengine/default/common/act_qmaster
+          subPath: act_qmaster
+        - name: apache-conf
+          mountPath: /opt/docker/etc/httpd/conf.d/10-server.conf
+          subPath: server.conf
+      volumes:
+      - name: frontend-sgecore-shareddata
+        persistentVolumeClaim:
+          claimName: dashboard-frontend-sgecore-shareddata
+      - name: frontend-tools
+        persistentVolumeClaim:
+          claimName: dashboard-frontend-tools
+      - name: apache-conf
+        configMap:
+          name: dashboard-frontend-apache-conf
+          items:
+          - key: server.conf
+            path: server.conf
+      - name: conf
+        configMap:
+          name: dashboard-frontend-config
+          items:
+          - key: globals.inc.php
+            path: globals.inc.php
+          - key: act_qmaster
+            path: act_qmaster

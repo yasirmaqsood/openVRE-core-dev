@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard-keycloak
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dashboard-keycloak
+  template:
+    metadata:
+      labels:
+        app: dashboard-keycloak
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: dashboard-keycloak
+        image: quay.io/keycloak/keycloak:15.0.2
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        args:
+        - -b
+        - 0.0.0.0
+        envFrom:
+        - secretRef:
+            name: dashboard-keycloak-password
+        - configMapRef:
+            name: dashboard-keycloak-env
+        env:
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: dashboard-postgres-password
+              key: POSTGRES_PASSWORD
+        - name: DB_DATABASE
+          valueFrom:
+            configMapKeyRef:
+              name: dashboard-postgres-env
+              key: POSTGRES_DB
+        - name: DB_USER
+          valueFrom:
+            configMapKeyRef:
+              name: dashboard-postgres-env
+              key: POSTGRES_USER
+        resources:
+          limits:
+            cpu: '1'
+            memory: 1Gi
+          requests:
+            cpu: 200m
+            memory: 512Mi

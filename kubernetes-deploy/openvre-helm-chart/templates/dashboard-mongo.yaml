@@ -1,0 +1,197 @@
+{{- if .Values.components.dashboardMongo.enabled }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dashboard-mongodb-password
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+type: Opaque
+stringData:
+  MONGO_INITDB_ROOT_PASSWORD: {{ .Values.secrets.dashboardMongo.rootPassword | quote }}
+  MONGO_INITDB_PASSWORD: {{ .Values.secrets.dashboardMongo.appPassword | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-mongodb-env
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+data:
+  MONGO_INITDB_ROOT_USERNAME: {{ .Values.secrets.dashboardMongo.rootUser | quote }}
+  MONGO_INITDB_USERNAME: {{ .Values.secrets.dashboardMongo.appUser | quote }}
+  MONGO_MAIN_DB: {{ .Values.dashboardMongo.env.mainDb | quote }}
+  MONGO_TLS_MODE: {{ .Values.dashboardMongo.env.tlsMode | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-mongodb-conf
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+data:
+  mongod.conf: |
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-mongodb-init-sh
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+data:
+  mongodb-init.sh: |
+    #!/bin/bash
+    set -e
+    echo "Starting MongoDB initialization script"
+    mongosh <<EOF
+    db = db.getSiblingDB('$MONGO_MAIN_DB');
+    if (db.getUser("$MONGO_INITDB_USERNAME") === null) {
+      db.createUser({
+        user: "$MONGO_INITDB_USERNAME",
+        pwd: "$MONGO_INITDB_PASSWORD",
+        roles: [{ role: "readWrite", db: "$MONGO_MAIN_DB" }]
+      });
+      print("Application user created.");
+    } else {
+      print("Application user already exists.");
+    }
+    EOF
+    for mongo_document in /init_documents/*.json; do
+      [ -f "$mongo_document" ] || continue
+      mongoimport --db ${MONGO_MAIN_DB} \
+        --jsonArray \
+        --username ${MONGO_INITDB_USERNAME} \
+        --password ${MONGO_INITDB_PASSWORD} \
+        --file "$mongo_document"
+    done
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-mongodb-init-documents
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+data:
+{{- if and .Values.dashboardMongo.initDocuments.enabled .Values.dashboardMongo.initDocuments.useBundledDefaults }}
+  data_types.json: |
+{{ .Files.Get "files/mongodb-init/data_types.json" | nindent 4 }}
+  file_types.json: |
+{{ .Files.Get "files/mongodb-init/file_types.json" | nindent 4 }}
+  sampleData.json: |
+{{ .Files.Get "files/mongodb-init/sampleData.json" | nindent 4 }}
+  sites.json: |
+{{ .Files.Get "files/mongodb-init/sites.json" | nindent 4 }}
+  tools.json: |
+{{ .Files.Get "files/mongodb-init/tools.json" | nindent 4 }}
+{{- else }}
+  data_types.json: |
+{{ .Values.dashboardMongo.initDocuments.dataTypesJson | indent 4 }}
+  file_types.json: |
+{{ .Values.dashboardMongo.initDocuments.fileTypesJson | indent 4 }}
+  sampleData.json: |
+{{ .Values.dashboardMongo.initDocuments.sampleDataJson | indent 4 }}
+  sites.json: |
+{{ .Values.dashboardMongo.initDocuments.sitesJson | indent 4 }}
+  tools.json: |
+{{ .Values.dashboardMongo.initDocuments.toolsJson | indent 4 }}
+{{- end }}
+---
+{{- if .Values.dashboardMongo.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dashboard-mongodb-data
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  {{- if .Values.dashboardMongo.persistence.storageClassName }}
+  storageClassName: {{ .Values.dashboardMongo.persistence.storageClassName | quote }}
+  {{- end }}
+  accessModes:
+    - {{ .Values.dashboardMongo.persistence.accessMode | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.dashboardMongo.persistence.size | quote }}
+---
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard-mongodb
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  ports:
+    - name: api
+      port: {{ .Values.dashboardMongo.service.port }}
+      targetPort: {{ .Values.dashboardMongo.service.port }}
+      protocol: TCP
+  selector:
+    app: dashboard-mongodb
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard-mongodb
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  replicas: {{ .Values.dashboardMongo.replicaCount }}
+  selector:
+    matchLabels:
+      app: dashboard-mongodb
+  template:
+    metadata:
+      labels:
+        app: dashboard-mongodb
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: dashboard-mongodb
+          image: {{ .Values.images.dashboardMongo.repository }}:{{ .Values.images.dashboardMongo.tag }}
+          args:
+            - mongod
+            - --bind_ip_all
+            - --tlsMode={{ .Values.dashboardMongo.env.tlsMode }}
+          ports:
+            - containerPort: {{ .Values.dashboardMongo.service.port }}
+          envFrom:
+            - secretRef:
+                name: dashboard-mongodb-password
+            - configMapRef:
+                name: dashboard-mongodb-env
+          env:
+            - name: MONGO_PORT
+              value: {{ .Values.dashboardMongo.service.port | quote }}
+          resources:
+            {{- toYaml .Values.dashboardMongo.resources | nindent 12 }}
+          volumeMounts:
+            - name: conf-configmap
+              mountPath: /etc/mongo/mongod.conf
+              subPath: mongod.conf
+            - name: init-sh-configmap
+              mountPath: /docker-entrypoint-initdb.d/
+            - name: init-documents-configmap
+              mountPath: /init_documents
+            - name: data
+              mountPath: /data/db
+      volumes:
+        - name: conf-configmap
+          configMap:
+            name: dashboard-mongodb-conf
+            items:
+              - key: mongod.conf
+                path: mongod.conf
+        - name: init-sh-configmap
+          configMap:
+            name: dashboard-mongodb-init-sh
+            defaultMode: 0755
+        - name: init-documents-configmap
+          configMap:
+            name: dashboard-mongodb-init-documents
+        - name: data
+          persistentVolumeClaim:
+            claimName: dashboard-mongodb-data
+{{- end }}

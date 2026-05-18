@@ -1,0 +1,94 @@
+{{- if .Values.components.postgres.enabled }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dashboard-postgres-password
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: {{ .Values.secrets.keycloak.dbPassword | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-postgres-env
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+data:
+  POSTGRES_DB: {{ .Values.keycloak.database.name | quote }}
+  POSTGRES_USER: {{ .Values.secrets.keycloak.dbUser | quote }}
+---
+{{- if .Values.postgres.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dashboard-postgres-data
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  {{- if .Values.postgres.persistence.storageClassName }}
+  storageClassName: {{ .Values.postgres.persistence.storageClassName | quote }}
+  {{- end }}
+  accessModes:
+    - {{ .Values.postgres.persistence.accessMode | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.postgres.persistence.size | quote }}
+---
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard-postgres
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  ports:
+    - name: api
+      port: {{ .Values.postgres.service.port }}
+      targetPort: {{ .Values.postgres.service.port }}
+      protocol: TCP
+  selector:
+    app: dashboard-postgres
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard-postgres
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  replicas: {{ .Values.postgres.replicaCount }}
+  selector:
+    matchLabels:
+      app: dashboard-postgres
+  template:
+    metadata:
+      labels:
+        app: dashboard-postgres
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: dashboard-postgres
+          image: {{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}
+          ports:
+            - containerPort: {{ .Values.postgres.service.port }}
+          envFrom:
+            - configMapRef:
+                name: dashboard-postgres-env
+            - secretRef:
+                name: dashboard-postgres-password
+          resources:
+            {{- toYaml .Values.postgres.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: dashboard-postgres-data
+{{- end }}

@@ -1,0 +1,29 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: keycloak-ingress-egress
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  podSelector:
+    matchLabels:
+      app: dashboard-keycloak
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: dashboard-frontend
+    ports:
+    - protocol: TCP
+      port: 8080
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: dashboard-postgres
+    ports:
+    - protocol: TCP
+      port: 5432
