@@ -1,20 +1,23 @@
+# OpenVRE — branch `kubernetes-with-deploy`
 
-# Open Virtual Research Environment core development (openVRE-core-dev)
+Backup / full-deploy branch: **batch Kubernetes** OpenVRE PHP (same as `kubernetes`) **plus** the complete `kubernetes-deploy/` bundle (Helm, scheduler, cluster-bundle).
 
-OpenVRE (Open Virtual Research Environment) is an open-source, cloud-based platform designed to facilitate the creation, 
-management and customization of Virtual Research Environments (VREs). OpenVRE bridges the gap between HPC resources, 
-sensitive data infrastructures and analytical tools and workflows, providing a flexible environment that enables secure 
-data access, scalable computation and collaboration.
+Use this branch to reproduce a full stack install without interactive-session PHP.
 
-This repository contains the source code for the openVRE core development version, which includes the core components of
-the platform. Other software pieces as the tools, visualizers and data are specific to the each openVRE deployment.
+## Start here
 
-A production-ready version of openVRE can be found in the [openVRE](https://github.com/inab/openVRE) repository. It also
-includes a complete documentation of the platform at the respository [wiki](https://github.com/inab/openVRE/wiki).
+| Doc | Purpose |
+|-----|---------|
+| [kubernetes-deploy/openvre-helm-chart/GETTING_STARTED.md](./kubernetes-deploy/openvre-helm-chart/GETTING_STARTED.md) | Install from scratch |
+| [kubernetes-deploy/openvre-helm-chart/README.md](./kubernetes-deploy/openvre-helm-chart/README.md) | Chart reference |
+| [kubernetes-deploy/README.md](./kubernetes-deploy/README.md) | Deploy bundle layout |
+| [kubernetes-deploy/scheduler/README.md](./kubernetes-deploy/scheduler/README.md) | Batch Job scheduler only |
 
-⚠️ This documentation is a work in progress and may not correspond with the production version repository documentation.
+## Interactive variants
 
-For installation, check the [Install](https://github.com/inab/openVRE-core-dev/tree/master/Install.md) documentation. 
+For RStudio per-session pods, use:
 
-After the installation is complete, you can access the platform at the following URL: [http://localhost:8088](http://localhost:8088).
+- **`kubernetes-interactive-pod`**
+- **`kubernetes-interactive-pod-with-auth`**
 
+Those branches include interactive PHP and `kubernetes-deploy/INTERACTIVE.md`.

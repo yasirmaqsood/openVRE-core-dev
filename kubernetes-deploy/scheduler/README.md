@@ -10,7 +10,7 @@ ymaqsoodbsc/openvre-kubernetes:scheduler-1.0
 
 ## Build
 
-From `k8s-deployments/bsc-tre-copy`:
+From repo root:
 
 ```bash
 docker build -t ymaqsoodbsc/openvre-kubernetes:scheduler-1.0 ./scheduler
