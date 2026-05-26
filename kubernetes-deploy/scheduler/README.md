@@ -1,68 +1,53 @@
-# OpenVRE Scheduler Image
+# OpenVRE Scheduler (batch / `kubernetes_native` jobs)
 
-This folder contains the standalone scheduler service that the OpenVRE frontend calls to create, inspect, and delete Kubernetes `batch/v1` Jobs.
+Python service the frontend calls to create, inspect, and delete Kubernetes `batch/v1` Jobs.
 
-The Helm chart now uses the published scheduler image by default:
-
-```text
-ymaqsoodbsc/openvre-kubernetes:scheduler-1.0
-```
+**Branch:** batch-only (`kubernetes`, `kubernetes-with-deploy`).  
+**Image tag (Helm default):** `scheduler-1.0`
 
 ## Build
 
-From repo root:
+From this directory:
 
 ```bash
-docker build -t ymaqsoodbsc/openvre-kubernetes:scheduler-1.0 ./scheduler
-```
-
-Or with a registry:
-
-```bash
-docker build -t <registry>/openvre-kubernetes:scheduler-1.0 ./scheduler
+docker build -t <registry>/openvre-kubernetes:scheduler-1.0 .
 docker push <registry>/openvre-kubernetes:scheduler-1.0
 ```
 
-## Runtime configuration
+From repo root on `kubernetes-with-deploy`:
 
-The scheduler expects to run inside Kubernetes with a mounted ServiceAccount token. It reads:
+```bash
+docker build -t <registry>/openvre-kubernetes:scheduler-1.0 kubernetes-deploy/scheduler
+```
+
+## Environment
 
 | Variable | Purpose |
-|---|---|
-| `DEFAULT_NAMESPACE` | Namespace where Jobs are created if the request does not specify one. |
-| `SCHEDULER_AUTH_TOKEN` | Bearer token required from the frontend. |
-| `KUBERNETES_SERVICE_HOST` | Set automatically by Kubernetes. |
-| `KUBERNETES_SERVICE_PORT` | Set automatically by Kubernetes. |
+|----------|---------|
+| `DEFAULT_NAMESPACE` | Namespace for Jobs when not specified in the request |
+| `SCHEDULER_AUTH_TOKEN` | Bearer token required from the frontend |
+| `KUBERNETES_SERVICE_HOST` / `PORT` | Set automatically in-cluster |
 
-It also reads the standard ServiceAccount files:
-
-```text
-/var/run/secrets/kubernetes.io/serviceaccount/token
-/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-```
+ServiceAccount token and CA are read from `/var/run/secrets/kubernetes.io/serviceaccount/`.
 
 ## API
 
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/healthz` | Health check, no auth required. |
-| `POST` | `/jobs` | Create a Kubernetes Job from a YAML manifest. |
-| `GET` | `/jobs/<name>?namespace=<namespace>` | Read a Job. |
-| `DELETE` | `/jobs/<name>?namespace=<namespace>` | Delete a Job. |
-
-All `/jobs` endpoints require:
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/healthz` | No | Health check |
+| `POST` | `/jobs` | Yes | Create Job from YAML manifest |
+| `GET` | `/jobs/<name>?namespace=` | Yes | Get Job |
+| `DELETE` | `/jobs/<name>?namespace=` | Yes | Delete Job |
 
 ```text
 Authorization: Bearer <SCHEDULER_AUTH_TOKEN>
 ```
 
-## Helm integration
-
-The chart runs this image directly. It no longer mounts scheduler code from the `scheduler-app` ConfigMap.
+## Helm
 
 ```yaml
 scheduler:
   image:
-    repository: ymaqsoodbsc/openvre-kubernetes
+    repository: <registry>/openvre-kubernetes
     tag: "scheduler-1.0"
 ```

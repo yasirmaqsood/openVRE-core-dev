@@ -1,12 +1,3 @@
-.git
-.gitignore
-__pycache__/
 *.pyc
-*.pyo
-*.pyd
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-dist/
-build/
-*.egg-info/
+__pycache__
+.git
