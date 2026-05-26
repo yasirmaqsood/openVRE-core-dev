@@ -1,66 +1,32 @@
-# OpenVRE Scheduler
+# OpenVRE Scheduler (batch jobs + interactive sessions)
 
-Standalone service the OpenVRE frontend calls for Kubernetes workloads.
+**Branch:** `kubernetes-interactive-pod-with-auth`  
+**Image tag (Helm default):** `scheduler-1.1-interactive-auth`
 
-On branch **`kubernetes-interactive-pod`** / **`kubernetes-interactive-pod-with-auth`**, `app.py` also manages **interactive sessions** (Deployments, Services, Ingresses).
+Manages Kubernetes batch Jobs and interactive sessions (Deployment, Service, Ingress).
 
 ## Build
 
-From repo root:
-
 ```bash
-docker build -t <registry>/openvre-kubernetes:scheduler-interactive kubernetes-deploy/scheduler
-docker push <registry>/openvre-kubernetes:scheduler-interactive
+docker build -t <registry>/openvre-kubernetes:scheduler-1.1-interactive-auth kubernetes-deploy/scheduler
+docker push <registry>/openvre-kubernetes:scheduler-1.1-interactive-auth
 ```
 
-## Runtime environment
+## Environment
 
 | Variable | Purpose |
 |----------|---------|
-| `DEFAULT_NAMESPACE` | Namespace for Jobs / interactive resources |
+| `DEFAULT_NAMESPACE` | Namespace for Jobs and interactive resources |
 | `SCHEDULER_AUTH_TOKEN` | Bearer token required from frontend |
-| `OPENVRE_INTERACTIVE_AUTH_URL` | **Auth branch only** — ingress `auth-url` |
-| `OPENVRE_INTERACTIVE_AUTH_SIGNIN` | **Auth branch only** — ingress `auth-signin` |
+| `OPENVRE_INTERACTIVE_AUTH_URL` | Set when Helm `interactive.openvreAuth.enabled: true` (ingress auth-url + auth-signin; RStudio DISABLE_AUTH). |
+| `OPENVRE_INTERACTIVE_AUTH_SIGNIN` | Set when Helm `interactive.openvreAuth.enabled: true` (ingress auth-url + auth-signin; RStudio DISABLE_AUTH). |
 
-## API — batch jobs
+## API
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/healthz` | Health check (no auth) |
-| `POST` | `/jobs` | Create a Kubernetes Job |
-| `GET` | `/jobs/<name>?namespace=` | Get Job |
-| `DELETE` | `/jobs/<name>?namespace=` | Delete Job |
+Batch: `POST/GET/DELETE /jobs` — Interactive: `POST/GET/DELETE /interactive-sessions` — Health: `GET /healthz` (no auth).
 
-## API — interactive sessions
+## Behaviour on this branch
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/interactive-sessions` | Create Deployment + Service + Ingress + ConfigMap |
-| `GET` | `/interactive-sessions/<name>?namespace=` | Session status |
-| `DELETE` | `/interactive-sessions/<name>?namespace=` | Tear down all session resources |
+Set when Helm `interactive.openvreAuth.enabled: true` (ingress auth-url + auth-signin; RStudio DISABLE_AUTH).
 
-All endpoints except `/healthz` require:
-
-```text
-Authorization: Bearer <SCHEDULER_AUTH_TOKEN>
-```
-
-## Pods vs auth
-
-| | Pods branch | Auth branch |
-|--|-------------|-------------|
-| `DISABLE_AUTH` on RStudio pod | Yes | Yes |
-| Ingress `auth-url` | No | Yes (when env set) |
-
-See [../INTERACTIVE.md](../INTERACTIVE.md).
-
-## Helm
-
-```yaml
-scheduler:
-  image:
-    repository: ymaqsoodbsc/openvre-kubernetes
-    tag: scheduler-interactive
-```
-
-Chart templates: `../openvre-helm-chart/templates/scheduler.yaml`.
+Helm chart: `kubernetes-deploy/openvre-helm-chart` — use tag `scheduler-1.1-interactive-auth`.

@@ -227,7 +227,7 @@ scheduler:
   enabled: true
   image:
     repository: ymaqsoodbsc/openvre-kubernetes
-    tag: "scheduler-1.1-interactive"
+    tag: "scheduler-1.1-interactive-auth"
   service:
     port: 8080
   authSecretName: scheduler-auth
