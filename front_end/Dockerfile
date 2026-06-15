@@ -30,7 +30,7 @@ RUN echo "deb [ signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] http://re
 RUN apt-get update
 RUN apt-get install -y mongodb-org
 
-#
+
 ADD setup.sh /usr/local/bin/setup.sh
 RUN chmod +x /usr/local/bin/setup.sh
 RUN mkdir -p /var/log/apache
@@ -39,7 +39,9 @@ WORKDIR /var/www/html
 ADD openVRE /var/www/html/openVRE
 RUN cd openVRE
 WORKDIR /var/www/html/openVRE
-# Dependencies are pre-seeded in ./openVRE/vendor for offline/reproducible builds.
+RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+RUN composer self-update
+RUN composer update --ignore-platform-req=ext-mongodb --ignore-platform-req=ext-mongodb
 RUN mkdir logs
 RUN touch logs/application.log
 RUN chmod -R 777 logs/application.log
