@@ -3,6 +3,7 @@
 use OpenVRE\LoggerFactory;
 use OpenVRE\NotFoundException;
 use OpenVRE\ProcessK8s;
+use OpenVRE\ProcessK8sInteractive;
 use OpenVRE\ProcessSGE;
 use OpenVRE\ProcessSlurm;
 
@@ -97,14 +98,19 @@ function getRunningJobInfo($pid, $launcherType = null)
         throw new NotFoundException("Job ID not found in session.");
     }
 
-    if (is_null($launcherType) && is_numeric($pid)) {
+    if (strpos((string)$pid, "openvre-ix-") === 0) {
+        $launcherType = "kubernetes_interactive";
+    } elseif (is_null($launcherType) && is_numeric($pid)) {
         $launcherType = "SGE";
-    } elseif (strpos((string)$pid, "-") !== false) {
+    } elseif (is_null($launcherType) && strpos((string)$pid, "-") !== false) {
         $launcherType = "kubernetes_native";
     }
 
     if ($launcherType == "SGE" || $launcherType == "docker_SGE") {
         $process = new ProcessSGE();
+        $job = $process->getRunningJobInfo($pid);
+    } elseif ($launcherType == "kubernetes_interactive") {
+        $process = new ProcessK8sInteractive();
         $job = $process->getRunningJobInfo($pid);
     } elseif ($launcherType == "kubernetes_native") {
         $process = new ProcessK8s();
@@ -214,15 +220,38 @@ function delJob($pid, $launcherType = null, $login = null)
         throw new NotFoundException("Job ID not provided.");
     }
 
+    if (strpos((string)$pid, "openvre-ix-") === 0) {
+        $launcherType = "kubernetes_interactive";
+    }
+
     // guess launcher
     if (!$launcherType && is_numeric($pid)) {
         $launcherType = "docker_SGE";
-    } elseif (strpos((string)$pid, "-") !== false) {
+    } elseif (!$launcherType && strpos((string)$pid, "-") !== false) {
         $launcherType = "kubernetes_native";
+    }
+
+    if ($launcherType === "kubernetes_interactive") {
+        $processIx = new ProcessK8sInteractive();
+        list($ok, $msg) = $processIx->stop($pid);
+        if (!$ok) {
+            getJobProcessLogger()->error("delJob kubernetes_interactive pid=$pid failed: $msg");
+            throw new UnexpectedValueException("Cannot stop interactive session [id = $pid]. $msg");
+        }
+        $_SESSION['errorData']['Info'][] = "Interactive session stopped.";
+        if (!$login) {
+            $login = $_SESSION['User']['_id'];
+        }
+        delUserJob($login, $pid);
+        if (isset($_SESSION['User']['lastjobs'][$pid])) {
+            unset($_SESSION['User']['lastjobs'][$pid]);
+        }
+        return true;
     }
 
     // cancel job
     $r_sge = false;
+    $msg_sge = "";
     if ($launcherType == "SGE" || $launcherType == "docker_SGE") {
         $processSGE = new ProcessSGE();
         list($r_sge, $msg_sge) = $processSGE->stop($pid);
@@ -239,15 +268,15 @@ function delJob($pid, $launcherType = null, $login = null)
         throw new UnexpectedValueException("Cannot delete job of type '$launcherType' [id = $pid]. Launcher not implemented.");
     }
 
-    $jobUser = $_SESSION['User']['lastjobs'][$pid];
+    $jobUser = $_SESSION['User']['lastjobs'][$pid] ?? null;
 
-    if ($jobUser && $jobUser['job_type'] == "interactive") {
+    if ($jobUser && ($jobUser['job_type'] ?? '') === "interactive") {
         return false;
     }
 
     if ($r_sge === false) {
-        getProcessValidationLogger()->error("Cannot delete $launcherType job [id = $pid].<br/> SGE Error: $msg_sge<br/>Docker Error");
-        throw new UnexpectedValueException("Cannot delete $launcherType job [id = $pid].<br/> SGE Error: $msg_sge<br/>Docker Error");
+        getJobProcessLogger()->error("Cannot delete $launcherType job [id = $pid]. Error: $msg_sge");
+        throw new UnexpectedValueException("Cannot delete $launcherType job [id = $pid]. Error: $msg_sge");
     }
 
     $_SESSION['errorData']['Info'][] = "Job successfully cancelled";
@@ -258,4 +287,5 @@ function delJob($pid, $launcherType = null, $login = null)
     if (!$login) {
         $login = $_SESSION['User']['_id'];
     }
+    return true;
 }

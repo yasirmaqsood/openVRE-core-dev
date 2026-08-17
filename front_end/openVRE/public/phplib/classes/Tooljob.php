@@ -37,6 +37,8 @@ class Tooljob
 	public $pub_dir_intern;
 
 	public $containerName;
+	public $access_path;
+	public $interactive_tool = array();
 
 	// Paths to files genereted during ToolJob execution
 	public $config_file;
@@ -1426,6 +1428,11 @@ class Tooljob
 		$cpus = $launcherInfo['cpus'] ?? $tool['infrastructure']['cpus'];
 		$queue = $launcherInfo['queue'] ?? $tool['infrastructure']['clouds'][$this->cloudName]['queue'];
 		$this->logger->info("Resolved Parameters: Queue=$queue, CPUs=$cpus, Memory=$memory");
+
+		if ($jobManager === "kubernetes_native" && !empty($tool['infrastructure']['interactive'])) {
+			return $this->enqueueInteractiveK8s($tool, $cpus, $memory);
+		}
+
 		$jobOptions = array();
 		if ($jobManager === "kubernetes_native") {
 			$jobOptions["image"] = $tool['infrastructure']['container_image'] ?? "";
@@ -1446,6 +1453,43 @@ class Tooljob
 
 		$this->pid = $pid;
 		return $pid;
+	}
+
+
+	protected function enqueueInteractiveK8s($tool, $cpus, $memory)
+	{
+		$process = new ProcessK8sInteractive();
+		$userId = $_SESSION['User']['id'] ?? "";
+		if (!$process->createSession($tool, $userId, "", array(
+			"working_dir" => $this->working_dir,
+			"root_dir" => $this->root_dir,
+			"project" => $this->project,
+			"execution" => $this->execution,
+		))) {
+			$err = $process->getErr() ?: "Cannot create interactive session";
+			$this->logger->error("K8s interactive session failed: " . $err);
+			$_SESSION['errorData']['Error'][] = "Internal error. Cannot start interactive session.<br/>" . $err;
+			return 0;
+		}
+
+		$this->job_type = "interactive";
+		$this->launcher = "kubernetes_interactive";
+		$this->pid = $process->getPid();
+		$this->access_path = $process->getAccessUrl();
+		$this->containerName = $this->access_path;
+		if (preg_match('#/interactive-tool/([^/]+)/?#', $this->access_path, $matches)) {
+			$this->containerName = $matches[1];
+		}
+		$this->interactive_tool = array(
+			"container_name" => $this->containerName,
+			"access_url" => $this->access_path,
+			"k8s_name" => $this->pid,
+		);
+
+		$this->logger->info(
+			"K8s interactive session started tool={$this->toolId} pid={$this->pid} url={$this->access_path}"
+		);
+		return $this->pid;
 	}
 
 

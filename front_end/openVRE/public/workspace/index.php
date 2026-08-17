@@ -31,6 +31,65 @@ $dtlist = ((isset($_REQUEST["tool"]) && $_REQUEST["tool"] != "") ? getAvailableD
 // project list
 $projects = getProjects_byOwner();
 
+// Sync rstudio_data files from disk into Mongo (K8 interactive RStudio pattern).
+foreach ($projects as $projectId => $projectAttributes) {
+	$rstudioRel = $projectAttributes['path'] . "/rstudio_data";
+	$rstudioPath = $GLOBALS['dataDir'] . "/" . $rstudioRel;
+	if (!is_dir($rstudioPath)) {
+		continue;
+	}
+	$rstudioFiles = scandir($rstudioPath);
+	if (!is_array($rstudioFiles)) {
+		continue;
+	}
+	$rstudioDirId = getGSFileId_fromPath($rstudioRel);
+	for ($i = 2; $i < count($rstudioFiles); $i++) {
+		$name = $rstudioFiles[$i];
+		if ($name === '.' || $name === '..' || $name[0] === '.') {
+			continue;
+		}
+		$absFile = $rstudioPath . "/" . $name;
+		if (!is_file($absFile)) {
+			continue;
+		}
+		$relFile = $rstudioRel . "/" . $name;
+		if (getGSFileId_fromPath($relFile)) {
+			continue;
+		}
+		$fileId = createLabel();
+		$GLOBALS['filesCol']->updateOne(
+			['_id' => $fileId],
+			['$set' => array(
+				'_id'     => $fileId,
+				'mtime'   => new MongoDB\BSON\UTCDateTime(strtotime("now") * 1000),
+				'owner'   => $_SESSION['User']['id'],
+				'size'    => filesize($absFile),
+				'path'    => $relFile,
+				'project' => $projectId,
+				'parentDir' => $rstudioDirId,
+				'type' => "file"
+			)],
+			['upsert' => true]
+		);
+		$GLOBALS['filesMetaCol']->updateOne(
+			['_id' => $fileId],
+			['$set' => array(
+				'_id'     => $fileId,
+				'compressed' => false,
+				'data_type' => "Rstudio_data",
+				'format' => "R",
+				'validated' => true,
+				'visible' => true
+			)],
+			['upsert' => true]
+		);
+		$GLOBALS['filesCol']->updateOne(
+			['_id' => $rstudioDirId],
+			['$addToSet' => ['files' => $fileId]]
+		);
+	}
+}
+
 //update files workspace content (job and files)
 $allFiles = getFilesToDisplay(array('_id' => $_SESSION['User']['dataDir']));
 
