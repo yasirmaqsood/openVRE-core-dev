@@ -61,6 +61,7 @@ INTERACTIVE_MANAGED_BY = "openvre-scheduler"
 # OPENVRE_EVICTION_TOLERATION_SECONDS: overrides Kubernetes 300s not-ready/unreachable wait
 OPENVRE_NODE_SELECTOR = os.environ.get("OPENVRE_NODE_SELECTOR", "").strip()
 OPENVRE_TOLERATIONS = os.environ.get("OPENVRE_TOLERATIONS", "").strip()
+OPENVRE_PREFERRED_HOSTNAME = os.environ.get("OPENVRE_PREFERRED_HOSTNAME", "").strip()
 EVICTION_TOLERATION_SECONDS = int(
     os.environ.get("OPENVRE_EVICTION_TOLERATION_SECONDS", "60") or "60"
 )
@@ -77,6 +78,43 @@ def parse_node_selector(raw):
         if k:
             out[k] = v
     return out
+
+
+def interactive_affinity():
+    """Prefer the home worker; also sit with other OpenVRE pods in this namespace."""
+    affinity = {}
+    host = OPENVRE_PREFERRED_HOSTNAME
+    if host:
+        affinity["nodeAffinity"] = {
+            "preferredDuringSchedulingIgnoredDuringExecution": [
+                {
+                    "weight": 100,
+                    "preference": {
+                        "matchExpressions": [
+                            {
+                                "key": "kubernetes.io/hostname",
+                                "operator": "In",
+                                "values": [host],
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+    affinity["podAffinity"] = {
+        "preferredDuringSchedulingIgnoredDuringExecution": [
+            {
+                "weight": 100,
+                "podAffinityTerm": {
+                    "labelSelector": {
+                        "matchLabels": {"openvre.colocate": "true"},
+                    },
+                    "topologyKey": "kubernetes.io/hostname",
+                },
+            }
+        ]
+    }
+    return affinity
 
 
 def parse_tolerations(raw):
@@ -350,7 +388,7 @@ def snapshot_k8s_audit(
     if manifests:
         for manifest in manifests:
             kind = (manifest.get("kind") or "object").lower()
-            write_json_file(os.path.join(audit_dir, f"{kind}.yaml.json"), manifest)
+            write_json_file(os.path.join(audit_dir, f"{kind}.json"), manifest)
 
     if wait_pods_sec > 0:
         deadline = time.time() + wait_pods_sec
@@ -363,7 +401,7 @@ def snapshot_k8s_audit(
     pods = list_pods_for_app(ns, name)
     pod_names = [p.get("metadata", {}).get("name", "") for p in pods if p.get("metadata", {}).get("name")]
     if len(pods) == 1:
-        write_json_file(os.path.join(audit_dir, f"pod-{phase}.yaml.json"), pods[0])
+        write_json_file(os.path.join(audit_dir, f"pod-{phase}.json"), pods[0])
 
     # Deployment live object
     code, raw = k8s_request(
@@ -372,17 +410,17 @@ def snapshot_k8s_audit(
     if code < 300:
         try:
             write_json_file(
-                os.path.join(audit_dir, f"deployment-live-{phase}.yaml.json"),
+                os.path.join(audit_dir, f"deployment-live-{phase}.json"),
                 json.loads(raw),
             )
         except Exception:
             write_text_file(
-                os.path.join(audit_dir, f"deployment-live-{phase}.yaml.json"), raw
+                os.path.join(audit_dir, f"deployment-live-{phase}.json"), raw
             )
 
     event_names = [name] + pod_names + [f"{name}-proxy-hdr"]
     events = collect_namespace_events(ns, event_names)
-    write_json_file(os.path.join(audit_dir, f"k8s-events-{phase}.yaml.json"), events)
+    write_json_file(os.path.join(audit_dir, f"k8s-events-{phase}.json"), events)
 
     write_json_file(meta_path, meta)
 
@@ -721,6 +759,7 @@ while True:
                     "labels": {
                         "app": name,
                         INTERACTIVE_LABEL: "true",
+                        "openvre.colocate": "true",
                     }
                 },
                 "spec": {
@@ -734,6 +773,7 @@ while True:
                         if parse_node_selector(OPENVRE_NODE_SELECTOR)
                         else {}
                     ),
+                    "affinity": interactive_affinity(),
                     "tolerations": pod_tolerations(),
                 },
             },
@@ -1147,7 +1187,7 @@ class Handler(BaseHTTPRequestHandler):
                         for manifest in manifests:
                             kind = (manifest.get("kind") or "object").lower()
                             write_json_file(
-                                os.path.join(audit_host_path, f"{kind}.yaml.json"),
+                                os.path.join(audit_host_path, f"{kind}.json"),
                                 manifest,
                             )
 
