@@ -116,7 +116,7 @@ function setUserWorkSpace($homeDir, $projectDir, $projectData, $sampleData, $ver
 				mkdir("$dataDirP/repository", 0775);
 			}
 
-			// RStudio K8 workspace (mounted as /rstudio_data in interactive pods).
+			// RStudio workspace .
 			$rstudioDirId = createGSDirBNS($dataDir . "/rstudio_data", 1);
 			getProjectLogger()->info("Creating rstudio_data directory: $dataDir/rstudio_data ($rstudioDirId)");
 			if ($rstudioDirId == "0") {

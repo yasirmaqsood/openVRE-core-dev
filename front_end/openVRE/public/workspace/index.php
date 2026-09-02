@@ -32,7 +32,7 @@ $dtlist = ((isset($_REQUEST["tool"]) && $_REQUEST["tool"] != "") ? getAvailableD
 $projects = getProjects_byOwner();
 syncProjectFiles($projects);
 
-// Sync rstudio_data files from disk into Mongo (K8 interactive RStudio pattern).
+// Sync rstudio_data files from disk into Mongo.
 foreach ($projects as $projectId => $projectAttributes) {
 	$rstudioRel = $projectAttributes['path'] . "/rstudio_data";
 	$rstudioPath = $GLOBALS['dataDir'] . "/" . $rstudioRel;

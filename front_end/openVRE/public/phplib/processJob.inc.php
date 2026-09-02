@@ -105,7 +105,7 @@ function getRunningJobInfo($pid, $launcherType = null)
         $launcherType = "kubernetes_interactive";
     } elseif (is_null($launcherType) && is_numeric($pid)) {
         $launcherType = "SGE";
-    } elseif (is_null($launcherType) && strpos((string)$pid, "-") !== false) {
+    } elseif (is_null($launcherType) && strpos((string)$pid, "openvre-bj-") === 0) {
         $launcherType = "kubernetes_native";
     }
 
@@ -230,7 +230,7 @@ function delJob($pid, $launcherType = null, $login = null)
     // guess launcher
     if (!$launcherType && is_numeric($pid)) {
         $launcherType = "docker_SGE";
-    } elseif (!$launcherType && strpos((string)$pid, "-") !== false) {
+    } elseif (!$launcherType && strpos((string)$pid, "openvre-bj-") === 0) {
         $launcherType = "kubernetes_native";
     }
 

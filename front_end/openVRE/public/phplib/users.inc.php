@@ -101,7 +101,9 @@ function createUserFromToken($login, $token, $userInfo = array(), $anonID = fals
         }
 
         if (isset($userInfo['roles'])) {
-            $userAttributes['roles'] = explode(',', $userInfo['roles']);
+            $userAttributes['roles'] = is_array($userInfo['roles'])
+                ? $userInfo['roles']
+                : explode(',', (string)$userInfo['roles']);
         }
 
         $_SESSION['allowedDatasetIds'] = [];
@@ -122,7 +124,7 @@ function createUserFromToken($login, $token, $userInfo = array(), $anonID = fals
         $_SESSION['tokenInfo'] = $userInfo;
     }
 
-    $objUser = new User($userAttributes['Email'], $userAttributes['secretsId'], $userAttributes['Surname'], $userAttributes['Name'], "", $userAttributes['Type'], "", "", $userAttributes['AuthProvider'], "", $userAttributes['roles']);
+    $objUser = new User($userAttributes['Email'], $userAttributes['secretsId'] ?? '', $userAttributes['Surname'] ?? '', $userAttributes['Name'] ?? '', "", $userAttributes['Type'], "", "", $userAttributes['AuthProvider'] ?? null, "", $userAttributes['roles'] ?? []);
 
     $userArray = $objUser->toDocument();
     //load user in current session
@@ -292,8 +294,14 @@ function loadUserWithToken($user, $userInfo, $token)
 
     $auxlastlog = $user['lastLogin'];
     $user['lastLogin'] = moment();
-    $user['secretsId'] = $userInfo['sub'];
-    $user['roles']     = explode(',', $userInfo['roles']);
+    $user['secretsId'] = $userInfo['sub'] ?? ($user['secretsId'] ?? '');
+    if (isset($userInfo['roles'])) {
+        $user['roles'] = is_array($userInfo['roles'])
+            ? $userInfo['roles']
+            : explode(',', (string)$userInfo['roles']);
+    } else {
+        $user['roles'] = $user['roles'] ?? [];
+    }
     $_SESSION['userToken'] = $token;
     $_SESSION['tokenInfo'] = $userInfo;
 

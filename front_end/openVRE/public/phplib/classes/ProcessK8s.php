@@ -20,9 +20,17 @@ use Monolog\Logger;
  *   OPENVRE_K8S_RUN_AS_GID      — GID / fsGroup for the Job pod
  *   OPENVRE_K8S_JOB_TTL         — seconds to keep a finished Job before auto-deletion
  *   OPENVRE_K8S_JOB_DEADLINE    — max seconds a Job is allowed to run before being killed
+ *   OPENVRE_K8S_JOB_MEMORY_REQUEST — fallback memory request when tool has no infrastructure.memory (e.g. "1Gi")
+ *   OPENVRE_K8S_JOB_MEMORY_LIMIT   — fallback memory limit when tool has no infrastructure.memory (e.g. "2Gi")
+ *   OPENVRE_K8S_NODE_SELECTOR   — optional "key=value,key2=value2" (same as scheduler)
+ *   OPENVRE_K8S_TOLERATIONS     — optional "key=value:Effect,..." (same as scheduler)
+ *   OPENVRE_K8S_EVICTION_TOLERATION_SECONDS — not-ready/unreachable eviction grace (default 60)
  */
 class ProcessK8s
 {
+    /** Prefix for batch Job names in Kubernetes (OpenVRE pid). */
+    public const BATCH_JOB_PREFIX = 'openvre-bj-';
+
     private Logger $logger;
 
     /** Kubernetes Job name, also used as the OpenVRE "pid" */
@@ -76,6 +84,12 @@ class ProcessK8s
     /** Max seconds a Job is allowed to run before being killed */
     private int $jobDeadline;
 
+    /** Optional nodeSelector for batch Job pods (project-pinned clusters) */
+    private array $nodeSelector = [];
+
+    /** Tolerations for batch Job pods (project taints + eviction) */
+    private array $tolerations = [];
+
     /** Additional environment variables to inject into the Job pod (from tool Mongo definition) */
     private array $jobEnv = [];
 
@@ -111,8 +125,17 @@ class ProcessK8s
         $this->runAsGid = (int)$this->env("OPENVRE_K8S_RUN_AS_GID");
         $this->jobTtl = (int)$this->env("OPENVRE_K8S_JOB_TTL");
         $this->jobDeadline = (int)$this->env("OPENVRE_K8S_JOB_DEADLINE");
+        $this->nodeSelector = $this->parseNodeSelector($this->optionalEnv("OPENVRE_K8S_NODE_SELECTOR"));
+        $evictionSeconds = (int)$this->optionalEnv("OPENVRE_K8S_EVICTION_TOLERATION_SECONDS", "60");
+        if ($evictionSeconds <= 0) {
+            $evictionSeconds = 60;
+        }
+        $this->tolerations = array_merge(
+            $this->parseTolerations($this->optionalEnv("OPENVRE_K8S_TOLERATIONS")),
+            $this->evictionTolerations($evictionSeconds)
+        );
 
-        // Allow per-tool overrides: the tool's Mongo document can specify a custom
+        // Allow per-tool overrides:
         // container image and extra environment variables via $jobOptions.
         if (!empty($jobOptions["image"])) {
             $this->jobImage = $jobOptions["image"];
@@ -143,19 +166,34 @@ class ProcessK8s
         return $value;
     }
 
+    private function optionalEnv(string $name, string $default = ""): string
+    {
+        $value = getenv($name);
+        return ($value === false) ? $default : $value;
+    }
+
+    public static function isBatchJobPid(string $pid): bool
+    {
+        return str_starts_with($pid, self::BATCH_JOB_PREFIX);
+    }
+
     private function sanitizeName(string $name): string
     {
+        $prefix = self::BATCH_JOB_PREFIX;
+        $maxSlugLen = 63 - strlen($prefix) - 9; // "-{8-char hash}"
+
         $name = strtolower($name);
         $name = preg_replace('/[^a-z0-9-]+/', '-', $name);
         $name = trim($name, '-');
         if ($name === "") {
-            $name = "openvre-job";
+            $name = "job";
         }
-        if (strlen($name) > 40) {
-            $name = substr($name, 0, 40);
+        if (strlen($name) > $maxSlugLen) {
+            $name = substr($name, 0, $maxSlugLen);
             $name = rtrim($name, '-');
         }
-        return $name . "-" . substr(md5(uniqid("", true)), 0, 8);
+
+        return $prefix . $name . "-" . substr(md5(uniqid("", true)), 0, 8);
     }
 
 
@@ -207,9 +245,19 @@ class ProcessK8s
 
     private function buildJobManifest(string $jobName, int $cpu, int $mem): array
     {
-        $cpuRequest = max(1, $cpu);
-        $cpuLimit = max(1, $cpu);
-        $memLimit = ($mem > 0 ? ($mem . "Gi") : "4Gi");
+        $cpuRequest = $cpu > 0 ? (string)$cpu : "1";
+        $cpuLimit = $cpu > 0 ? (string)$cpu : "1";
+        $memLimit = $mem > 0 ? ($mem . "Gi") : $this->optionalEnv("OPENVRE_K8S_JOB_MEMORY_LIMIT");
+        $memRequest = $mem > 0 ? ($mem . "Gi") : $this->optionalEnv("OPENVRE_K8S_JOB_MEMORY_REQUEST");
+
+        $requests = array("cpu" => $cpuRequest);
+        $limits = array("cpu" => $cpuLimit);
+        if ($memRequest !== "") {
+            $requests["memory"] = $memRequest;
+        }
+        if ($memLimit !== "") {
+            $limits["memory"] = $memLimit;
+        }
 
         $manifest = array(
             "apiVersion" => "batch/v1",
@@ -227,6 +275,14 @@ class ProcessK8s
                 "activeDeadlineSeconds" => $this->jobDeadline,
                 "backoffLimit" => 0,
                 "template" => array(
+                    "metadata" => array(
+                        "labels" => array(
+                            "app.kubernetes.io/managed-by" => "openvre",
+                            "openvre-job-id" => $jobName,
+                            "openvre.colocate" => "true",
+                            "openvre.io/batch" => "true",
+                        ),
+                    ),
                     "spec" => array(
                         "restartPolicy" => "Never",
                         "containers" => array(
@@ -239,8 +295,8 @@ class ProcessK8s
                                     array("name" => "OPENVRE_SUBMIT_SCRIPT", "value" => $this->command),
                                 ),
                                 "resources" => array(
-                                    "requests" => array("cpu" => (string)$cpuRequest),
-                                    "limits" => array("cpu" => (string)$cpuLimit, "memory" => $memLimit)
+                                    "requests" => $requests,
+                                    "limits" => $limits,
                                 ),
                                 "securityContext" => array(
                                     "allowPrivilegeEscalation" => false,
@@ -277,7 +333,80 @@ class ProcessK8s
             }
         }
 
+        $podSpec =& $manifest["spec"]["template"]["spec"];
+        if (!empty($this->nodeSelector)) {
+            $podSpec["nodeSelector"] = $this->nodeSelector;
+        }
+        if (!empty($this->tolerations)) {
+            $podSpec["tolerations"] = $this->tolerations;
+        }
+
         return $manifest;
+    }
+
+    private function parseNodeSelector(string $raw): array
+    {
+        $selector = [];
+        foreach (explode(",", $raw) as $part) {
+            $part = trim($part);
+            if ($part === "" || !str_contains($part, "=")) {
+                continue;
+            }
+            [$key, $value] = array_map("trim", explode("=", $part, 2));
+            if ($key !== "" && $value !== "") {
+                $selector[$key] = $value;
+            }
+        }
+
+        return $selector;
+    }
+
+    private function parseTolerations(string $raw): array
+    {
+        $tolerations = [];
+        foreach (explode(",", $raw) as $part) {
+            $part = trim($part);
+            if ($part === "") {
+                continue;
+            }
+            if (str_contains($part, "=")) {
+                [$kv, $effect] = array_pad(explode(":", $part, 2), 2, "NoSchedule");
+                [$key, $value] = array_map("trim", explode("=", $kv, 2));
+                $tolerations[] = [
+                    "key" => $key,
+                    "operator" => "Equal",
+                    "value" => $value,
+                    "effect" => $effect !== "" ? $effect : "NoSchedule",
+                ];
+            } else {
+                [$key, $effect] = array_pad(explode(":", $part, 2), 2, "NoSchedule");
+                $tolerations[] = [
+                    "key" => trim($key),
+                    "operator" => "Exists",
+                    "effect" => $effect !== "" ? $effect : "NoSchedule",
+                ];
+            }
+        }
+
+        return $tolerations;
+    }
+
+    private function evictionTolerations(int $seconds): array
+    {
+        return [
+            [
+                "key" => "node.kubernetes.io/not-ready",
+                "operator" => "Exists",
+                "effect" => "NoExecute",
+                "tolerationSeconds" => $seconds,
+            ],
+            [
+                "key" => "node.kubernetes.io/unreachable",
+                "operator" => "Exists",
+                "effect" => "NoExecute",
+                "tolerationSeconds" => $seconds,
+            ],
+        ];
     }
 
 
