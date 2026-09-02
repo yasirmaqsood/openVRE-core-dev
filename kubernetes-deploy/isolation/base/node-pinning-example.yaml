@@ -1,0 +1,61 @@
+# Example: pin a project namespace to a dedicated worker + local volume paths.
+# Replace __PROJECT__, __NODE__ before apply. Paths must already exist on the node.
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: __PROJECT__-local
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain
+---
+# Repeat this PV pattern per claim (shareddata / tools / mongodb / postgres / admindata).
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: __PROJECT__-shareddata
+  labels:
+    openvre.project: __PROJECT__
+    openvre.volume: shareddata
+spec:
+  capacity:
+    storage: 20Gi
+  accessModes: ["ReadWriteOnce"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: __PROJECT__-local
+  volumeMode: Filesystem
+  local:
+    path: /data/__PROJECT__/shareddata
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: ["__NODE__"]
+---
+# Node labelling / taint (run via kubectl, not usually stored as objects):
+#   kubectl label node __NODE__ openvre.project=__PROJECT__ --overwrite
+#   kubectl taint nodes __NODE__ openvre.project=__PROJECT__:NoSchedule --overwrite
+#
+# Workload patch (every Deployment / interactive session):
+#   Prefer Helm values (kubernetes-deploy/values-project-a.yaml):
+#     nodePinning:
+#       enabled: true
+#       nodeSelector: { openvre.project: __PROJECT__ }
+#       tolerations:
+#         - key: openvre.project
+#           operator: Equal
+#           value: __PROJECT__
+#           effect: NoSchedule
+#
+#   Manual kubectl patch (legacy):
+#   nodeSelector: { openvre.project: __PROJECT__ }
+#   tolerations:
+#     - key: openvre.project
+#       operator: Equal
+#       value: __PROJECT__
+#       effect: NoSchedule
+#
+# Scheduler env for interactive sessions is set automatically from the same
+# nodePinning block when you helm upgrade with values-project-*.yaml.

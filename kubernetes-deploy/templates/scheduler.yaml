@@ -1,0 +1,205 @@
+{{- if .Values.scheduler.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: scheduler
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scheduler
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "services", "configmaps", "events"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["create", "get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scheduler
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+subjects:
+  - kind: ServiceAccount
+    name: scheduler
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: scheduler
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.scheduler.authSecretName }}
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+type: Opaque
+stringData:
+  {{ .Values.scheduler.authSecretKey }}: {{ .Values.scheduler.authToken | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduler
+  labels:
+    app: scheduler
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: scheduler
+  template:
+    metadata:
+      labels:
+        app: scheduler
+        openvre.colocate: "true"
+    spec:
+      serviceAccountName: scheduler
+      automountServiceAccountToken: true
+      securityContext:
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+{{- include "openvre.nodeSelector" . | nindent 6 }}
+{{- include "openvre.tolerations" . | nindent 6 }}
+{{- include "openvre.affinity" . | nindent 6 }}
+      containers:
+        - name: scheduler
+          image: {{ .Values.images.scheduler.repository }}:{{ .Values.images.scheduler.tag }}
+          env:
+            - name: DEFAULT_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: SCHEDULER_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.scheduler.authSecretName }}
+                  key: {{ .Values.scheduler.authSecretKey }}
+            - name: OPENVRE_INGRESS_CLASS
+              value: {{ .Values.domain.ingressClassName | quote }}
+            - name: DEFAULT_SHARED_PVC
+              value: {{ .Values.frontend.env.openvreK8sSharedPvc | quote }}
+            - name: DEFAULT_USERDATA_PVC
+              value: {{ (.Values.interactive.userDataPvc | default .Values.frontend.env.openvreK8sSharedPvc) | quote }}
+            - name: DEFAULT_ADMINDATA_PVC
+              value: {{ (.Values.interactive.adminDataPvc | default .Values.frontend.env.openvreK8sSharedPvc) | quote }}
+            - name: OPENVRE_INTERACTIVE_DEFAULT_PORT
+              value: {{ .Values.interactive.defaultPort | quote }}
+            - name: OPENVRE_INTERACTIVE_DEFAULT_MOUNT
+              value: {{ .Values.interactive.defaultMount | quote }}
+            {{- if .Values.interactive.defaultImage }}
+            - name: OPENVRE_INTERACTIVE_DEFAULT_IMAGE
+              value: {{ .Values.interactive.defaultImage | quote }}
+            {{- end }}
+            - name: OPENVRE_STRICT
+              value: {{ (.Values.scheduler.strict | default "1") | quote }}
+            - name: OPENVRE_IMAGE_ALLOWLIST
+              value: {{ join "," (.Values.scheduler.imageAllowlist | default list) | quote }}
+            - name: OPENVRE_INTERACTIVE_AUDIT_SIDECAR_ENABLED
+              value: {{ .Values.interactive.auditSidecar.enabled | quote }}
+            - name: OPENVRE_INTERACTIVE_AUDIT_IMAGE
+              value: {{ .Values.interactive.auditSidecar.image | quote }}
+            - name: OPENVRE_INTERACTIVE_AUDIT_INTERVAL_SEC
+              value: {{ .Values.interactive.auditSidecar.intervalSec | quote }}
+            - name: OPENVRE_INTERACTIVE_AUDIT_BASE
+              value: {{ .Values.interactive.auditSidecar.outputBase | quote }}
+            - name: OPENVRE_SHARED_DATA_PREFIX
+              value: "/shared_data"
+            {{- if .Values.interactive.openvreAuth.enabled }}
+            - name: OPENVRE_INTERACTIVE_AUTH_URL
+              value: {{ .Values.interactive.openvreAuth.authUrl | quote }}
+            - name: OPENVRE_INTERACTIVE_AUTH_SIGNIN
+              value: {{ .Values.interactive.openvreAuth.signInUrl | quote }}
+            {{- end }}
+            - name: OPENVRE_EXTERNAL_BASE
+              value: {{ (.Values.scheduler.externalBase | default (printf "http://%s" .Values.domain.host)) | quote }}
+            - name: OPENVRE_AUDIT_RUN_AS_UID
+              value: {{ .Values.frontend.env.openvreK8sRunAsUid | quote }}
+            - name: OPENVRE_AUDIT_RUN_AS_GID
+              value: {{ .Values.frontend.env.openvreK8sRunAsGid | quote }}
+            - name: OPENVRE_EVICTION_TOLERATION_SECONDS
+              value: {{ (.Values.nodeEviction.tolerationSeconds | default 60) | quote }}
+            {{- with include "openvre.schedulerNodeSelectorEnv" . }}
+            - name: OPENVRE_NODE_SELECTOR
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with include "openvre.schedulerTolerationsEnv" . }}
+            - name: OPENVRE_TOLERATIONS
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if and .Values.nodePinning.enabled .Values.nodePinning.preferredHostname }}
+            - name: OPENVRE_PREFERRED_HOSTNAME
+              value: {{ .Values.nodePinning.preferredHostname | quote }}
+            {{- end }}
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            {{- $sharedPvc := .Values.frontend.env.openvreK8sSharedPvc }}
+            {{- $userPvc := .Values.interactive.userDataPvc | default $sharedPvc }}
+            {{- $adminPvc := .Values.interactive.adminDataPvc | default $sharedPvc }}
+            {{- if eq $userPvc $adminPvc }}
+            # Same claim: full tree (userdata + admindata) for YML writes + run mkdir.
+            - name: shared-data
+              mountPath: /shared_data
+            {{- else }}
+            # Separate claims (boss): userData for run folders, adminData for YMLs.
+            - name: userdata
+              mountPath: /shared_data/userdata
+            - name: admindata
+              mountPath: /shared_data/admindata
+            {{- end }}
+          resources:
+            {{- toYaml .Values.scheduler.resources | nindent 12 }}
+          securityContext:
+            # Match tool container UID/GID (OPENVRE_K8S_RUN_AS_*) for admin PVC writes.
+            runAsNonRoot: true
+            runAsUser: {{ .Values.frontend.env.openvreK8sRunAsUid | int }}
+            runAsGroup: {{ .Values.frontend.env.openvreK8sRunAsGid | int }}
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        {{- $sharedPvc := .Values.frontend.env.openvreK8sSharedPvc }}
+        {{- $userPvc := .Values.interactive.userDataPvc | default $sharedPvc }}
+        {{- $adminPvc := .Values.interactive.adminDataPvc | default $sharedPvc }}
+        {{- if eq $userPvc $adminPvc }}
+        - name: shared-data
+          persistentVolumeClaim:
+            claimName: {{ $userPvc | quote }}
+        {{- else }}
+        - name: userdata
+          persistentVolumeClaim:
+            claimName: {{ $userPvc | quote }}
+        - name: admindata
+          persistentVolumeClaim:
+            claimName: {{ $adminPvc | quote }}
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: scheduler
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  selector:
+    app: scheduler
+  ports:
+    - port: {{ .Values.scheduler.service.port }}
+      targetPort: 8080
+      protocol: TCP
+{{- end }}

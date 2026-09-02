@@ -1,0 +1,13 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: openvre-deny-dangerous-pods-__NAMESPACE__
+  labels:
+    openvre.isolation: "true"
+spec:
+  policyName: openvre-deny-dangerous-pods
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        openvre.project: __NAMESPACE__

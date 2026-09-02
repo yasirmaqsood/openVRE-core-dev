@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: isolation-status
+  namespace: __NAMESPACE__
+  labels:
+    openvre.isolation: "true"
+data:
+  level: namespace-hardened-v1
+  psa: "enforce=baseline; warn/audit=restricted"
+  notes: |
+    Applied by kubernetes-deploy/isolation/scripts/apply-isolation.sh
+    Chart NetworkPolicies come from Helm (hardening.networkPolicies.enabled).

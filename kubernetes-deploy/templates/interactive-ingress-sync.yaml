@@ -1,0 +1,154 @@
+{{- if and .Values.interactive.ingressSync.enabled .Values.domain.host }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: openvre-interactive-ingress-sync
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+    app: openvre-interactive-ingress-sync
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: openvre-interactive-ingress-sync
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+rules:
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openvre-interactive-ingress-sync
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: openvre-interactive-ingress-sync
+subjects:
+  - kind: ServiceAccount
+    name: openvre-interactive-ingress-sync
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openvre-interactive-ingress-sync
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+data:
+  sync.sh: |
+    #!/bin/sh
+    set -eu
+    NS="${NAMESPACE}"
+    HOST="${INGRESS_HOST}"
+    PRIORITY="${INGRESS_PRIORITY}"
+
+    echo "interactive ingress sync: namespace=${NS} host=${HOST} priority=${PRIORITY}"
+
+    patch_ingress() {
+      name="$1"
+      current_host="$(kubectl get ingress -n "${NS}" "${name}" -o jsonpath='{.spec.rules[0].host}' 2>/dev/null || true)"
+      current_pri="$(kubectl get ingress -n "${NS}" "${name}" -o jsonpath='{.metadata.annotations.nginx\.ingress\.kubernetes\.io/priority}' 2>/dev/null || true)"
+
+      if [ "${current_host}" != "${HOST}" ]; then
+        http_json="$(kubectl get ingress -n "${NS}" "${name}" -o jsonpath='{.spec.rules[0].http}' 2>/dev/null)"
+        if [ -n "${http_json}" ]; then
+          kubectl patch ingress -n "${NS}" "${name}" --type=merge -p "{\"spec\":{\"rules\":[{\"host\":\"${HOST}\",\"http\":${http_json}}]}}"
+          echo "patched host on ${name} -> ${HOST}"
+        fi
+      fi
+
+      if [ "${current_pri}" != "${PRIORITY}" ]; then
+        kubectl annotate ingress -n "${NS}" "${name}" --overwrite \
+          "nginx.ingress.kubernetes.io/priority=${PRIORITY}"
+        echo "patched priority on ${name} -> ${PRIORITY}"
+      fi
+    }
+
+    while true; do
+      for name in $(kubectl get ingress -n "${NS}" -l openvre.io/interactive=true -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null); do
+        [ -n "${name}" ] && patch_ingress "${name}" || true
+      done
+      sleep "${SYNC_INTERVAL_SECONDS}"
+    done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openvre-interactive-ingress-sync
+  labels:
+    app: openvre-interactive-ingress-sync
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openvre-interactive-ingress-sync
+  template:
+    metadata:
+      labels:
+        app: openvre-interactive-ingress-sync
+        openvre.colocate: "true"
+    spec:
+      serviceAccountName: openvre-interactive-ingress-sync
+      automountServiceAccountToken: true
+{{- include "openvre.nodeSelector" . | nindent 6 }}
+{{- include "openvre.affinity" . | nindent 6 }}
+      tolerations:
+        - key: node.kubernetes.io/not-ready
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: {{ int (.Values.nodeEviction.tolerationSeconds | default 60) }}
+        - key: node.kubernetes.io/unreachable
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: {{ int (.Values.nodeEviction.tolerationSeconds | default 60) }}
+        - key: node.kubernetes.io/disk-pressure
+          operator: Exists
+          effect: NoSchedule
+        - key: node.kubernetes.io/disk-pressure
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: {{ int (.Values.nodeEviction.tolerationSeconds | default 60) }}
+{{- if and .Values.nodePinning.enabled .Values.nodePinning.tolerations }}
+{{ toYaml .Values.nodePinning.tolerations | indent 8 }}
+{{- end }}
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: sync
+          image: {{ .Values.interactive.ingressSync.image | quote }}
+          command: ["/bin/sh", "/scripts/sync.sh"]
+          env:
+            - name: NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: INGRESS_HOST
+              value: {{ .Values.domain.host | quote }}
+            - name: INGRESS_PRIORITY
+              value: {{ .Values.interactive.ingressSync.priority | quote }}
+            - name: SYNC_INTERVAL_SECONDS
+              value: {{ .Values.interactive.ingressSync.intervalSeconds | quote }}
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+          resources:
+            {{- toYaml .Values.interactive.ingressSync.resources | nindent 12 }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            runAsGroup: 1001
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: scripts
+          configMap:
+            name: openvre-interactive-ingress-sync
+            defaultMode: 0555
+{{- end }}

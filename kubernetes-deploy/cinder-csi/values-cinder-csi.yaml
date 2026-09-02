@@ -1,0 +1,39 @@
+# Helm values for cpo/openstack-cinder-csi
+# Credentials live in Secret kube-system/cloud-config (created by install-cinder-csi.sh).
+# Chart nests controllerPlugin/nodePlugin under csi.plugin.
+
+secret:
+  enabled: true
+  hostMount: false
+  create: false
+  name: cloud-config
+  filename: cloud.conf
+
+csi:
+  snapshotter:
+    enabled: false
+  plugin:
+    volumes:
+      - name: cacert
+        hostPath:
+          path: /etc/ssl/certs
+          type: Directory
+    volumeMounts:
+      - name: cacert
+        mountPath: /etc/cacert
+        readOnly: true
+      - name: cloud-config
+        mountPath: /etc/config
+        readOnly: true
+    controllerPlugin:
+      replicas: 1
+      tolerations:
+        - operator: Exists
+    nodePlugin:
+      tolerations:
+        - operator: Exists
+
+storageClass:
+  enabled: false
+
+clusterID: openvre

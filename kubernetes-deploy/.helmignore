@@ -1,0 +1,2 @@
+# Keep the Helm release Secret under 1MiB. Seed PNGs with seed-rstudio-tool-files.sh.
+files/tools/rstudio/assets/home/*.png

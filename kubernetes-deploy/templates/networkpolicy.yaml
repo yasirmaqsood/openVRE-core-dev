@@ -1,0 +1,367 @@
+{{- if .Values.hardening.networkPolicies.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# podSelector peers only match endpoints Felix has programmed. Cross-node
+# pod-to-pod was dropped even though VXLAN worked. Allow the overlay CIDR
+# so frontend (worker01) can reach Mongo/scheduler (worker02).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-pod-cidr
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: {{ .Values.hardening.networkPolicies.podCidr | default "10.244.0.0/16" | quote }}
+  egress:
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.hardening.networkPolicies.podCidr | default "10.244.0.0/16" | quote }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-ingress
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  podSelector:
+    matchLabels:
+      app: dashboard-frontend
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.frontend.service.port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-egress
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  podSelector:
+    matchLabels:
+      app: dashboard-frontend
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: dashboard-keycloak
+      ports:
+        - protocol: TCP
+          port: {{ .Values.keycloak.service.port }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app: dashboard-mongodb
+      ports:
+        - protocol: TCP
+          port: {{ .Values.dashboardMongo.service.port }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app: dashboard-sgecore
+      ports:
+        - protocol: TCP
+          port: {{ .Values.sgecore.service.port }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app: scheduler
+      ports:
+        - protocol: TCP
+          port: {{ .Values.scheduler.service.port }}
+    - to:
+        - podSelector:
+            matchLabels:
+              openvre.io/interactive: "true"
+      ports:
+        {{- range (.Values.interactive.networkPolicy.ports | default (list 8787 8888 8080)) }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+    - ports:
+        - protocol: TCP
+          port: 443
+    # Token/userinfo go to dashboard-keycloak:8080. Port 80 is still needed
+    # if anything calls the public hostname (hostNetwork ingress on the LAN).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.interactive.networkPolicy.ingressNamespace | default "ingress-nginx" | quote }}
+        - ipBlock:
+            cidr: 192.168.0.0/24
+        - ipBlock:
+            cidr: 192.168.20.0/24
+      ports:
+        - protocol: TCP
+          port: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: interactive-session-ingress-egress
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  podSelector:
+    matchLabels:
+      openvre.io/interactive: "true"
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.interactive.networkPolicy.ingressNamespace | default "ingress-nginx" | quote }}
+      ports:
+        {{- range (.Values.interactive.networkPolicy.ports | default (list 8787 8888 8080)) }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+    - from:
+        - podSelector:
+            matchLabels:
+              app: dashboard-frontend
+      ports:
+        {{- range (.Values.interactive.networkPolicy.ports | default (list 8787 8888 8080)) }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: keycloak-ingress-egress
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  podSelector:
+    matchLabels:
+      app: dashboard-keycloak
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Browser hits Keycloak via ingress. hostNetwork ingress-nginx sources from
+    # the node/Calico IP, not the ingress pod IP, so do not require a from: selector.
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.keycloak.service.port }}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: dashboard-postgres
+      ports:
+        - protocol: TCP
+          port: {{ .Values.postgres.service.port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mongodb-ingress
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  podSelector:
+    matchLabels:
+      app: dashboard-mongodb
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: dashboard-frontend
+      ports:
+        - protocol: TCP
+          port: {{ .Values.dashboardMongo.service.port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-ingress
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  podSelector:
+    matchLabels:
+      app: dashboard-postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: dashboard-keycloak
+      ports:
+        - protocol: TCP
+          port: {{ .Values.postgres.service.port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sgecore-ingress
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  podSelector:
+    matchLabels:
+      app: dashboard-sgecore
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: dashboard-frontend
+      ports:
+        - protocol: TCP
+          port: {{ .Values.sgecore.service.port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: scheduler-ingress
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  podSelector:
+    matchLabels:
+      app: scheduler
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: dashboard-frontend
+      ports:
+        - protocol: TCP
+          port: {{ .Values.scheduler.service.port }}
+---
+# Scheduler creates Deployments via the Kubernetes API. default-deny blocks
+# that (API is 10.96.0.1, not the pod CIDR). After kube-proxy DNAT the
+# destination is the control-plane node :6443.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: scheduler-egress
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  podSelector:
+    matchLabels:
+      app: scheduler
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.hardening.networkPolicies.serviceCidr | default "10.96.0.0/12" | quote }}
+      ports:
+        - protocol: TCP
+          port: 443
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.hardening.networkPolicies.nodeCidr | default "192.168.0.0/24" | quote }}
+      ports:
+        - protocol: TCP
+          port: 6443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: batch-job-egress
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  podSelector:
+    matchLabels:
+      openvre.io/batch: "true"
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80
+{{- end }}

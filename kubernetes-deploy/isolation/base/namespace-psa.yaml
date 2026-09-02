@@ -1,0 +1,16 @@
+# Applied per project. Placeholder __NAMESPACE__ is replaced by apply-isolation.sh
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: __NAMESPACE__
+  labels:
+    name: __NAMESPACE__
+    openvre.project: __NAMESPACE__
+    # baseline: workable with current frontend (runs as root).
+    # restricted: target after frontend image is rebuilt for true non-root.
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest

@@ -1,0 +1,29 @@
+# Cluster-scoped: deny dangerous pod specs.
+# Bind per project namespace with validating-admission-policy-binding.yaml
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: openvre-deny-dangerous-pods
+  labels:
+    openvre.isolation: "true"
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  validations:
+    - expression: "!(has(object.spec.hostNetwork) && object.spec.hostNetwork)"
+      message: "hostNetwork is forbidden"
+    - expression: "!(has(object.spec.hostPID) && object.spec.hostPID)"
+      message: "hostPID is forbidden"
+    - expression: "!(has(object.spec.hostIPC) && object.spec.hostIPC)"
+      message: "hostIPC is forbidden"
+    - expression: "!has(object.spec.volumes) || !object.spec.volumes.exists(v, has(v.hostPath))"
+      message: "hostPath volumes are forbidden"
+    - expression: "object.spec.containers.all(c, !has(c.securityContext) || !has(c.securityContext.privileged) || c.securityContext.privileged != true)"
+      message: "privileged containers are forbidden"
+    - expression: "!has(object.spec.initContainers) || object.spec.initContainers.all(c, !has(c.securityContext) || !has(c.securityContext.privileged) || c.securityContext.privileged != true)"
+      message: "privileged init containers are forbidden"

@@ -1,0 +1,19 @@
+# Complements Helm chart NetworkPolicies (default-deny + component allows).
+# Allows ingress only from same namespace or the shared ingress-nginx controller.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-cross-namespace-ingress
+  namespace: __NAMESPACE__
+  labels:
+    openvre.isolation: "true"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx

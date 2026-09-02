@@ -1,0 +1,368 @@
+# ===========================================================================
+# OpenVRE Helm Chart — values.yaml
+#
+# This file contains the DEFAULT configuration. To deploy, create your own
+# values file (e.g. my-values.yaml) overriding at minimum:
+#   - domain.host
+#   - secrets.*  (all passwords)
+#   - images.frontend / images.sgecore  (your registry)
+#
+# Then install with:
+#   helm install openvre ./openvre -f my-values.yaml -n <namespace> --create-namespace
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Global settings
+# ---------------------------------------------------------------------------
+global:
+  name: openvre
+  environment: production
+
+# ---------------------------------------------------------------------------
+# Ingress / domain
+# ---------------------------------------------------------------------------
+domain:
+  host: "openvre.local"                      # REQUIRED: set to your domain (e.g. "openvre.example.com")
+  ingressClassName: nginx
+  tlsEnabled: false
+  tlsSecretName: ""             # set if tlsEnabled: true
+
+# ---------------------------------------------------------------------------
+# Component toggles — disable what you don't need
+# ---------------------------------------------------------------------------
+components:
+  frontend:
+    enabled: true
+  keycloak:
+    enabled: true
+  dashboardMongo:
+    enabled: true
+  postgres:
+    enabled: true
+  sgecore:
+    enabled: true
+  scheduler:
+    enabled: true
+
+# ---------------------------------------------------------------------------
+# Container images
+# ---------------------------------------------------------------------------
+images:
+  frontend:
+    repository: ghcr.io/inab/kubernetes-openvre-frontend
+    tag: "1.0"
+  keycloak:
+    repository: quay.io/keycloak/keycloak
+    tag: "26.4"
+  dashboardMongo:
+    repository: mongo
+    tag: "8.0"
+  sgecore:
+    repository: ghcr.io/inab/kubernetes-openvre-sge
+    tag: "1.0"
+  scheduler:
+    repository: ghcr.io/inab/kubernetes-openvre-scheduler
+    tag: "1.0"
+
+# ---------------------------------------------------------------------------
+# Secrets — CHANGE ALL OF THESE before production deployment
+# ---------------------------------------------------------------------------
+secrets:
+  dashboardMongo:
+    rootUser: mongo_root_user
+    rootPassword: CHANGEME-mongo-root-password
+    appUser: mongo_user
+    appPassword: CHANGEME-mongo-password
+  frontend:
+    keycloakSecret: CHANGEME-keycloak-client-secret
+    mailPass: ""
+  keycloak:
+    adminUser: admin
+    adminPassword: CHANGEME-keycloak-admin-password
+    dbUser: keycloak
+    dbPassword: CHANGEME-postgres-password
+
+# ---------------------------------------------------------------------------
+# MongoDB
+# ---------------------------------------------------------------------------
+dashboardMongo:
+  replicaCount: 1
+  service:
+    port: 27017
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: 300m
+      memory: 1Gi
+  persistence:
+    enabled: true
+    storageClassName: "local-path"        # leave empty to use cluster default
+    accessMode: ReadWriteOnce
+    size: 20Gi
+  env:
+    mainDb: openVRE
+    tlsMode: disabled
+  initDocuments:
+    # When true, Mongo runs the same seed JSON as openVRE-core-dev docker-compose
+    # (files/mongodb-init/*.json). Runs only on first start with an empty data volume.
+    enabled: true
+    useBundledDefaults: true
+    dataTypesJson: "[]"
+    fileFormatsJson: "[]"
+    rolePermissionsJson: "[]"
+    actionLogsJson: "[]"
+    sampleDataJson: "[]"
+    sitesJson: "[]"
+    toolsJson: "[]"
+    toolsRstudioJson: "[]"
+
+# ---------------------------------------------------------------------------
+# Keycloak (SSO)
+# ---------------------------------------------------------------------------
+keycloak:
+  replicaCount: 1
+  service:
+    port: 8080
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  frontendUrl: "http://openvre.local/auth"
+  # PHP token + userinfo (in-cluster). Do not use the public hostname here when
+  # ingress is hostNetwork — pods cannot hairpin to the node IP. Keep
+  # frontendUrl as the browser URL; Keycloak KC_HOSTNAME must match it.
+  internalUrl: "http://dashboard-keycloak:8080/auth"
+  database:
+    host: dashboard-postgres
+    port: 5432
+    name: keycloak
+    schema: public
+  proxyAddressForwarding: "false"
+  realm: project
+  realmImport:
+    enabled: true
+    initImage: python:3.11-alpine
+    oidcClientId: open-vre
+    importStrategy: OVERWRITE_EXISTING
+
+# ---------------------------------------------------------------------------
+# PostgreSQL (Keycloak backend)
+# ---------------------------------------------------------------------------
+postgres:
+  replicaCount: 1
+  image:
+    repository: postgres
+    tag: "17.3"
+  service:
+    port: 5432
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  persistence:
+    enabled: true
+    storageClassName: "local-path"        # leave empty to use cluster default
+    accessMode: ReadWriteOnce
+    size: 20Gi
+
+# ---------------------------------------------------------------------------
+# Frontend (OpenVRE web application)
+# ---------------------------------------------------------------------------
+frontend:
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 80
+  ingress:
+    enabled: true
+  # Resolve domain.host to ingress-nginx service IP from inside frontend pod.
+  # This avoids hardcoding cluster IPs in hostAliases.
+  hostAliasesAutoIngress: true
+  ingressLookup:
+    namespace: ingress-nginx
+    service: ingress-nginx-controller
+  hostAliases: []
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  sharedData:
+    persistence:
+      enabled: true
+      storageClassName: "local-path"      # leave empty to use cluster default
+      accessMode: ReadWriteOnce
+      size: 20Gi
+  tools:
+    persistence:
+      enabled: true
+      storageClassName: "local-path"      # leave empty to use cluster default
+      accessMode: ReadWriteOnce
+      size: 5Gi
+  env:
+    frontendHostPath: ""
+    keycloakClient: open-vre
+    mailHost: ""
+    mailUser: ""
+    vaultApiVersion: v1
+    vaultRoleName: user-role
+    vaultSecretPath: secret/data/
+    openvreK8sSharedPvc: "dashboard-frontend-sgecore-shareddata"
+    openvreK8sToolsPvc: "dashboard-frontend-tools"
+    openvreK8sRunAsUid: "1000"
+    openvreK8sRunAsGid: "1000"
+    openvreK8sJobImage: "ymaqsoodbsc/fem-tool-2-updated:1.0"
+    openvreK8sJobTtl: "120"
+    openvreK8sJobDeadline: "86400"
+    # Fallback batch Job memory when tool Mongo doc has no infrastructure.memory
+    openvreK8sJobMemoryRequest: "1Gi"
+    openvreK8sJobMemoryLimit: "2Gi"
+
+# ---------------------------------------------------------------------------
+# Scheduler (Kubernetes Job proxy — creates/monitors/deletes tool Jobs)
+# ---------------------------------------------------------------------------
+scheduler:
+  enabled: true
+  # Must match the public URL users open in browser.
+  # Scheduler uses this to generate correct interactive ingress host/redirects.
+  externalBase: "http://openvre.local"
+  service:
+    port: 8080
+  authSecretName: scheduler-auth
+  authSecretKey: token
+  authToken: CHANGEME-scheduler-token
+  # Fail closed: only these exact image refs may be used for interactive sessions.
+  # Must match Mongo tools[].infrastructure.container_image (and defaultImage if set).
+  strict: "1"
+  imageAllowlist: []
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# ---------------------------------------------------------------------------
+# Interactive tools (Kubernetes interactive sessions)
+# ---------------------------------------------------------------------------
+interactive:
+  # Use k8s-native interactive proxying instead of legacy docker-style apache rule.
+  disableLegacyApacheProxy: true
+  # Fallback when Mongo tool docs omit container_port / workspace mount.
+  defaultPort: "8787"
+  defaultMount: "/workspace"
+  # Optional fallback image if tool Mongo lacks infrastructure.container_image.
+  defaultImage: ""
+  # PVC claims for boss mount matrix. Empty = reuse frontend shared PVC.
+  # Set adminDataPvc + adminData.persistence.enabled to create a dedicated admin volume.
+  userDataPvc: ""
+  adminDataPvc: ""
+  adminData:
+    persistence:
+      enabled: false
+      storageClassName: "local-path"
+      accessMode: ReadWriteOnce
+      size: 10Gi
+  auditSidecar:
+    enabled: false
+    image: "python:3.11-alpine"
+    intervalSec: "5"
+    # Admin-only audit root (outside userdata). Layout:
+    # admindata/<tool>/<user>/<k8s-name>/
+    outputBase: "/shared_data/admindata"
+  # Optional; only set if tools need a shared interactive password via env.
+  # Leave empty so PHP does not send a password (no code default).
+  password: ""
+  networkPolicy:
+    # Namespace label of the ingress controller that reaches interactive Services.
+    ingressNamespace: ingress-nginx
+    # Ports interactive pods expose (RStudio/Jupyter/generic HTTP).
+    ports:
+      - 8787
+      - 8888
+      - 8080
+  ingressSync:
+    # Keep disabled unless you specifically need ingress host patching sidecar.
+    enabled: false
+  openvreAuth:
+    enabled: false
+    authUrl: ""
+    signInUrl: ""
+
+# ---------------------------------------------------------------------------
+# SGE Core (legacy grid engine bridge)
+# ---------------------------------------------------------------------------
+sgecore:
+  replicaCount: 1
+  service:
+    port: 6444
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  dockerGroup: "1002"
+  env:
+    sharedDataUid: "1000"
+    sharedDataGid: "1000"
+
+# ---------------------------------------------------------------------------
+# Node failure eviction
+# Kubernetes adds not-ready/unreachable NoExecute tolerations of 300s by default.
+# Explicit values here override that (60 = failover after ~1 minute).
+# ---------------------------------------------------------------------------
+nodeEviction:
+  tolerationSeconds: 60
+
+# ---------------------------------------------------------------------------
+# Node pinning (optional — dedicated worker per Helm release / project namespace)
+# ---------------------------------------------------------------------------
+nodePinning:
+  enabled: false
+  # Example when enabled (must match node label + taint on the target worker):
+  # nodeSelector:
+  #   openvre.project: project-a
+  # tolerations:
+  #   - key: openvre.project
+  #     operator: Equal
+  #     value: project-a
+  #     effect: NoSchedule
+  nodeSelector: {}
+  tolerations: []
+  # Pack pods onto one worker in the pool. If that node dies, they reschedule
+  # onto the other node with the same openvre.project / openvre.pool label.
+  colocate: false
+  preferredHostname: ""
+  # Example:
+  #   colocate: true
+  #   preferredHostname: worker01-demoproject
+
+# ---------------------------------------------------------------------------
+# Hardening
+# ---------------------------------------------------------------------------
+hardening:
+  podDisruptionBudgets:
+    enabled: true
+    minAvailable: 1
+  networkPolicies:
+    enabled: true
+    # Overlay CIDR (must match the cluster pod CIDR / Calico IPPool).
+    podCidr: "10.244.0.0/16"
+    # kubeadm Service CIDR — scheduler must reach kubernetes.default:443
+    serviceCidr: "10.96.0.0/12"
+    # Control-plane node LAN (apiserver is hostNetwork :6443 after kube-proxy DNAT)
+    nodeCidr: "192.168.0.0/24"
+

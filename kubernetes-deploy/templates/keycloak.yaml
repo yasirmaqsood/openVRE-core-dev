@@ -1,0 +1,239 @@
+{{- if .Values.components.keycloak.enabled }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dashboard-keycloak-password
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+type: Opaque
+stringData:
+  KC_BOOTSTRAP_ADMIN_PASSWORD: {{ .Values.secrets.keycloak.adminPassword | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-keycloak-env
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+data:
+  KC_DB: postgres
+  KC_DB_URL_HOST: {{ printf "%s.%s.svc.cluster.local" .Values.keycloak.database.host .Release.Namespace | quote }}
+  KC_DB_URL_PORT: {{ .Values.keycloak.database.port | quote }}
+  KC_DB_URL_DATABASE: {{ .Values.keycloak.database.name | quote }}
+  KC_DB_SCHEMA: {{ .Values.keycloak.database.schema | quote }}
+  KC_BOOTSTRAP_ADMIN_USERNAME: {{ .Values.secrets.keycloak.adminUser | quote }}
+  KC_PROXY_HEADERS: xforwarded
+  KC_HTTP_ENABLED: "true"
+  KC_HTTP_PORT: {{ .Values.keycloak.service.port | quote }}
+  # v2 hostname: keep the public issuer on tokens even when PHP calls
+  # dashboard-keycloak:8080 for token/userinfo (strict=false made Keycloak
+  # expect iss=http://dashboard-keycloak:8080/... and userinfo failed).
+  KC_HOSTNAME: {{ .Values.keycloak.frontendUrl | default (printf "http://%s/auth" .Values.domain.host) | quote }}
+  KC_HOSTNAME_STRICT: "true"
+  KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+  KC_HTTP_RELATIVE_PATH: "/auth"
+  {{- if .Values.keycloak.realmImport.enabled }}
+  KC_SPI_IMPORT_EXPORT_IMPORT_STRATEGY: {{ .Values.keycloak.realmImport.importStrategy | default "OVERWRITE_EXISTING" | quote }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard-keycloak
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  ports:
+    - name: api
+      port: {{ .Values.keycloak.service.port }}
+      targetPort: {{ .Values.keycloak.service.port }}
+      protocol: TCP
+  selector:
+    app: dashboard-keycloak
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard-keycloak
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  replicas: {{ .Values.keycloak.replicaCount }}
+  selector:
+    matchLabels:
+      app: dashboard-keycloak
+  template:
+    metadata:
+      labels:
+        app: dashboard-keycloak
+        openvre.colocate: "true"
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+{{- include "openvre.nodeSelector" . | nindent 6 }}
+{{- include "openvre.tolerations" . | nindent 6 }}
+{{- include "openvre.affinity" . | nindent 6 }}
+      {{- if .Values.keycloak.realmImport.enabled }}
+      initContainers:
+        - name: keycloak-realm-prepare
+          image: {{ .Values.keycloak.realmImport.initImage | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 65534
+            capabilities:
+              drop:
+                - ALL
+          command: ["python3", "-c"]
+          args:
+            - |
+              import json, os, pathlib
+
+              realm_name = os.environ["KC_REALM"]
+              client_id = os.environ["KC_CLIENT_ID"]
+              secret = os.environ["KC_CLIENT_SECRET"]
+              domain_host = os.environ.get("KC_DOMAIN_HOST", "").strip()
+              base_url = f"http://{domain_host}" if domain_host else ""
+              users = json.loads(os.environ.get("KC_REALM_USERS", "[]"))
+
+              pathlib.Path("/realm-out").mkdir(parents=True, exist_ok=True)
+
+              with open("/realm-in/realm-sample.json") as f:
+                  realm = json.load(f)
+
+              src_realm = realm.get("realm", "project")
+              realm["realm"] = realm_name
+
+              if src_realm != realm_name:
+                  old_default = f"default-roles-{src_realm}"
+                  new_default = f"default-roles-{realm_name}"
+
+                  def patch_value(v):
+                      if v == old_default:
+                          return new_default
+                      if v == "open-vre" and client_id != "open-vre":
+                          return client_id
+                      return v
+
+                  def patch_obj(obj):
+                      if isinstance(obj, dict):
+                          out = {}
+                          for k, v in obj.items():
+                              nk = k
+                              if k == "open-vre" and client_id != "open-vre":
+                                  nk = client_id
+                              elif k == old_default:
+                                  nk = new_default
+                              out[nk] = patch_obj(v)
+                          return out
+                      if isinstance(obj, list):
+                          return [patch_obj(x) for x in obj]
+                      if isinstance(obj, str):
+                          return patch_value(obj)
+                      return obj
+
+                  realm = patch_obj(realm)
+
+              for client in realm.get("clients", []):
+                  cid = client.get("clientId")
+                  if cid in (client_id, "open-vre"):
+                      client["clientId"] = client_id
+                      client["secret"] = secret
+                      client["enabled"] = True
+                      client["directAccessGrantsEnabled"] = True
+                      if base_url:
+                          client["rootUrl"] = base_url
+                          client["baseUrl"] = base_url + "/"
+                          client["redirectUris"] = [f"{base_url}/*"]
+                          client["webOrigins"] = [base_url, "+"]
+                      break
+
+              if users:
+                  default_role = f"default-roles-{realm_name}"
+                  realm["users"] = []
+                  for u in users:
+                      realm["users"].append({
+                          "username": u["username"],
+                          "enabled": True,
+                          "emailVerified": True,
+                          "firstName": u.get("firstName", ""),
+                          "lastName": u.get("lastName", ""),
+                          "email": u.get("email", ""),
+                          "credentials": [{
+                              "type": "password",
+                              "value": u["password"],
+                              "temporary": False,
+                          }],
+                          "realmRoles": [default_role],
+                      })
+
+              out_path = f"/realm-out/{realm_name}-realm.json"
+              with open(out_path, "w") as out:
+                  json.dump(realm, out)
+          env:
+            - name: KC_REALM
+              value: {{ .Values.keycloak.realm | quote }}
+            - name: KC_CLIENT_ID
+              value: {{ .Values.keycloak.realmImport.oidcClientId | quote }}
+            - name: KC_CLIENT_SECRET
+              value: {{ .Values.secrets.frontend.keycloakSecret | quote }}
+            - name: KC_DOMAIN_HOST
+              value: {{ .Values.domain.host | quote }}
+            - name: KC_REALM_USERS
+              value: {{ .Values.keycloak.realmImport.users | default list | toJson | quote }}
+          volumeMounts:
+            - name: realm-source
+              mountPath: /realm-in
+              readOnly: true
+            - name: realm-work
+              mountPath: /realm-out
+      {{- end }}
+      containers:
+        - name: dashboard-keycloak
+          image: {{ .Values.images.keycloak.repository }}:{{ .Values.images.keycloak.tag }}
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          args:
+            - start
+            {{- if .Values.keycloak.realmImport.enabled }}
+            - --import-realm
+            {{- end }}
+          envFrom:
+            - secretRef:
+                name: dashboard-keycloak-password
+            - configMapRef:
+                name: dashboard-keycloak-env
+          env:
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: dashboard-postgres-password
+                  key: POSTGRES_PASSWORD
+            - name: KC_DB_USERNAME
+              valueFrom:
+                configMapKeyRef:
+                  name: dashboard-postgres-env
+                  key: POSTGRES_USER
+          {{- if .Values.keycloak.realmImport.enabled }}
+          volumeMounts:
+            - name: realm-work
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+          {{- end }}
+          resources:
+            {{- toYaml .Values.keycloak.resources | nindent 12 }}
+      {{- if .Values.keycloak.realmImport.enabled }}
+      volumes:
+        - name: realm-source
+          configMap:
+            name: dashboard-keycloak-realm-raw
+        - name: realm-work
+          emptyDir: {}
+      {{- end }}
+{{- end }}

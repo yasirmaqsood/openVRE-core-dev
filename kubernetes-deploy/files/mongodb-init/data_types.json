@@ -1,0 +1,89 @@
+[
+  {
+    "_id": "data_manifest",
+    "name": "data_manifest",
+    "formats": [
+      "JSON"
+    ]
+  },
+  {
+    "_id": "data_quality_report",
+    "name": "data_quality_report",
+    "formats": [
+      "JSON"
+    ]
+  },
+  {
+    "_id": "FE_Query",
+    "name": "FE_Query",
+    "formats": [
+      "JSON"
+    ]
+  },
+  {
+    "_id": "dataset_reference",
+    "name": "dataset_reference",
+    "formats": [
+      "JSON"
+    ]
+  },
+  {
+    "_id": "dataset_id",
+    "name": "Dataset Id",
+    "formats": [
+      "JSON"
+    ]
+  },
+  {
+    "_id": "FLCore_parameters",
+    "name": "FLCore_parameters",
+    "formats": [
+      "YAML"
+    ]
+  },
+  {
+    "_id": "FE_query",
+    "name": "FE_query",
+    "formats": [
+      "JSON"
+    ]
+  },
+  {
+    "_id": "sequence_data",
+    "name": "sequence_data",
+    "formats": [
+      "FASTA"
+    ]
+  },
+  {
+    "_id": "3d_simulation",
+    "name": "3D Simulation",
+    "formats": [
+      "PTH",
+      "OBJ",
+      "STL"
+    ],
+    "assembly": []
+  },
+  {
+    "_id": "site_manifest",
+    "name": "site_manifest",
+    "formats": [
+      "JSON"
+    ]
+  },
+  {
+    "_id": "sequence_data",
+    "name": "sequence_data",
+    "formats": [
+      "FASTA"
+    ]
+  },
+  {
+    "_id": "id_list",
+    "name": "id_list",
+    "formats": [
+      "TXT"
+    ]
+  }
+]

@@ -1,0 +1,22 @@
+{{- /*
+Dedicated admin audit volume (separate from userdata/shared PVC).
+Created when interactive.adminData.persistence.enabled is true.
+*/ -}}
+{{- if and .Values.interactive.adminData.persistence.enabled .Values.interactive.adminDataPvc }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.interactive.adminDataPvc | quote }}
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+    app.kubernetes.io/component: admindata
+spec:
+  {{- if .Values.interactive.adminData.persistence.storageClassName }}
+  storageClassName: {{ .Values.interactive.adminData.persistence.storageClassName | quote }}
+  {{- end }}
+  accessModes:
+    - {{ .Values.interactive.adminData.persistence.accessMode | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.interactive.adminData.persistence.size | quote }}
+{{- end }}

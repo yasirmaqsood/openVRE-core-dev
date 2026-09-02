@@ -1,0 +1,492 @@
+{{- if .Values.components.frontend.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dashboard-frontend
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dashboard-frontend-passwords-secrets
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+type: Opaque
+stringData:
+  KEYCLOAK_SECRET: {{ .Values.secrets.frontend.keycloakSecret | quote }}
+  MAIL_PASS: {{ .Values.secrets.frontend.mailPass | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-frontend-env
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+data:
+  FRONTEND_HOST_PATH: {{ .Values.frontend.env.frontendHostPath | quote }}
+  KEYCLOAK_CLIENT: {{ .Values.frontend.env.keycloakClient | quote }}
+  KEYCLOAK_SERVER: {{ .Values.keycloak.internalUrl | default "http://dashboard-keycloak:8080/auth" | quote }}
+  # Browser authorize/logout. When Keycloak is external (shared admin cluster),
+  # set this to the same public URL as KEYCLOAK_SERVER (e.g. http://auth.vre.local/auth).
+  KEYCLOAK_PUBLIC_URL: {{ .Values.keycloak.frontendUrl | default (printf "http://%s/auth" .Values.domain.host) | quote }}
+  MAIL_HOST: {{ .Values.frontend.env.mailHost | quote }}
+  MAIL_USER: {{ .Values.frontend.env.mailUser | quote }}
+  MONGO_SERVER: {{ printf "dashboard-mongodb.%s.svc.cluster.local:27017" .Release.Namespace | quote }}
+  SERVER_DOMAIN: {{ .Values.domain.host | quote }}
+  VAULT_ADDR: {{ printf "http://dashboard-vault.%s.svc.cluster.local:8200" .Release.Namespace | quote }}
+  VAULT_API_VERSION: {{ .Values.frontend.env.vaultApiVersion | quote }}
+  VAULT_ROLENAME: {{ .Values.frontend.env.vaultRoleName | quote }}
+  VAULT_SECRET_PATH: {{ .Values.frontend.env.vaultSecretPath | quote }}
+  OPENVRE_K8S_SCHEDULER_URL: {{ printf "http://scheduler.%s.svc.cluster.local:%v" .Release.Namespace .Values.scheduler.service.port | quote }}
+  OPENVRE_K8S_NAMESPACE: {{ .Release.Namespace | quote }}
+  OPENVRE_K8S_SHARED_PVC: {{ .Values.frontend.env.openvreK8sSharedPvc | quote }}
+  OPENVRE_K8S_USERDATA_PVC: {{ (.Values.interactive.userDataPvc | default .Values.frontend.env.openvreK8sSharedPvc) | quote }}
+  OPENVRE_K8S_ADMINDATA_PVC: {{ (.Values.interactive.adminDataPvc | default .Values.frontend.env.openvreK8sSharedPvc) | quote }}
+  OPENVRE_K8S_TOOLS_PVC: {{ .Values.frontend.env.openvreK8sToolsPvc | quote }}
+  OPENVRE_K8S_RUN_AS_UID: {{ .Values.frontend.env.openvreK8sRunAsUid | quote }}
+  OPENVRE_K8S_RUN_AS_GID: {{ .Values.frontend.env.openvreK8sRunAsGid | quote }}
+  OPENVRE_K8S_JOB_IMAGE: {{ .Values.frontend.env.openvreK8sJobImage | quote }}
+  OPENVRE_K8S_JOB_TTL: {{ .Values.frontend.env.openvreK8sJobTtl | quote }}
+  OPENVRE_K8S_JOB_DEADLINE: {{ .Values.frontend.env.openvreK8sJobDeadline | default "86400" | quote }}
+  OPENVRE_K8S_JOB_MEMORY_REQUEST: {{ .Values.frontend.env.openvreK8sJobMemoryRequest | default "1Gi" | quote }}
+  OPENVRE_K8S_JOB_MEMORY_LIMIT: {{ .Values.frontend.env.openvreK8sJobMemoryLimit | default "2Gi" | quote }}
+  OPENVRE_SGE_ENABLED: {{ .Values.components.sgecore.enabled | quote }}
+  OPENVRE_K8S_EVICTION_TOLERATION_SECONDS: {{ (.Values.nodeEviction.tolerationSeconds | default 60) | quote }}
+  {{- with include "openvre.schedulerNodeSelectorEnv" . }}
+  OPENVRE_K8S_NODE_SELECTOR: {{ . | quote }}
+  {{- end }}
+  {{- with include "openvre.schedulerTolerationsEnv" . }}
+  OPENVRE_K8S_TOLERATIONS: {{ . | quote }}
+  {{- end }}
+  OPENVRE_INTERACTIVE_DEFAULT_PORT: {{ .Values.interactive.defaultPort | quote }}
+  OPENVRE_INTERACTIVE_DEFAULT_MOUNT: {{ .Values.interactive.defaultMount | quote }}
+  OPENVRE_SHARED_DATA_PREFIX: "/shared_data"
+  OPENVRE_INTERACTIVE_AUDIT_BASE: {{ .Values.interactive.auditSidecar.outputBase | quote }}
+  {{- if .Values.interactive.defaultImage }}
+  OPENVRE_INTERACTIVE_DEFAULT_IMAGE: {{ .Values.interactive.defaultImage | quote }}
+  {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-frontend-apache-conf
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+data:
+  server.conf: |
+    <VirtualHost *:80>
+        ServerName {{ .Values.domain.host | default "localhost" }}
+        DocumentRoot /var/www/html/openVRE/public/
+        DirectoryIndex index.php
+        <Directory "/var/www/html/openVRE/public/api">
+            AllowOverride All
+            Require all granted
+        </Directory>
+        {{- if .Values.components.keycloak.enabled }}
+        ProxyPass "/auth" "http://dashboard-keycloak.{{ .Release.Namespace }}.svc.cluster.local:8080/auth"
+        ProxyPassReverse "/auth" "http://dashboard-keycloak.{{ .Release.Namespace }}.svc.cluster.local:8080/auth"
+        {{- end }}
+    # Legacy bookmarks: tools/front/{id}/ -> tools/{id}/front/
+    RewriteEngine on
+    RewriteRule ^/tools/front/([^/]+)/(.*)$ /tools/$1/front/$2 [R=302,L]
+    # Legacy bookmarks: /tools/rstudio/input.php -> /tools/rstudio/front/input.php
+    RewriteCond %{REQUEST_URI} !^/tools/rstudio/front/
+    RewriteRule ^/tools/rstudio/(.*)$ /tools/rstudio/front/$1 [R=302,L]
+        {{- if not .Values.interactive.disableLegacyApacheProxy }}
+        RewriteRule ^/interactive-tool/([^/]+)/?(.*) https://$1:8090/$2 [P,L]
+        {{- else }}
+        {{- $ixPort := .Values.interactive.defaultPort | default 8787 }}
+        {{- $extBase := .Values.scheduler.externalBase | default (printf "http://%s" .Values.domain.host) }}
+        # Kubernetes interactive sessions: proxy to per-session Service (scheduler creates openvre-ix-<id>).
+        # Backend port must match interactive.defaultPort / tool Service port.
+        ProxyPreserveHost On
+        RequestHeader set X-Forwarded-Proto "{{ if or (hasPrefix "https://" $extBase) .Values.domain.tlsEnabled }}https{{ else }}http{{ end }}"
+        # RStudio must know its URL prefix or it redirects to /auth-sign-in at site root (404 on Apache).
+        RewriteCond %{REQUEST_URI} ^/interactive-tool/([a-zA-Z0-9_-]+)
+        RewriteRule .* - [E=IX_PATH:/interactive-tool/%1]
+        RequestHeader set X-RStudio-Root-Path "%{IX_PATH}e" env=IX_PATH
+        RequestHeader set X-Forwarded-Prefix "%{IX_PATH}e" env=IX_PATH
+        RewriteRule ^/interactive-tool/([^/]+)/?(.*) http://openvre-ix-$1.{{ .Release.Namespace }}.svc.cluster.local:{{ $ixPort }}/$2 [P,L]
+        {{- end }}
+        ErrorLog /var/log/apache/vre-error.log
+        CustomLog /var/log/apache/vre.log combined
+    </VirtualHost>
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-frontend-config
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+data:
+  act_qmaster: |
+    dashboard-sgecore.{{ .Release.Namespace }}
+  globals.inc.php: |
+    <?php
+    $GLOBALS['BASEURL'] = "/";
+    $GLOBALS['AppPrefix'] = "BSC_TRE";
+    $GLOBALS['NAME'] = "BSC TRE";
+    $GLOBALS['SITETITLE'] = "BSC TRE | Virtual Research Environment";
+    $GLOBALS['TIMEOUT'] = 3600;
+    $GLOBALS['FROMNAME'] = "VRE";
+    $GLOBALS['ADMINMAIL'] = "admin@example.com";
+    $GLOBALS['DISKLIMIT'] = 10*1024*1024*1024;
+    $GLOBALS['DISKLIMIT_ANON'] = 5*1024*1024*1024;
+    $GLOBALS['MAXSIZEUPLOAD'] = 4000;
+    $GLOBALS['caduca'] = "182";
+    $GLOBALS['project_default'] = "MyFirstProject";
+    $GLOBALS['tmpUser_dir'] = ".tmp/";
+    $GLOBALS['sampleData_default'] = "basic";
+    $GLOBALS['root'] = dirname(__DIR__);
+    $GLOBALS['shared'] = "/shared_data/";
+    $GLOBALS['logFile'] = $GLOBALS['root']."/logs/application.log";
+    $GLOBALS['dataDir'] = $GLOBALS['shared']."userdata/";
+    $GLOBALS['pubDir'] = $GLOBALS['shared']."public/";
+    $GLOBALS['sampleDataPath'] = "/var/www/html/openVRE/data/sampleData/";
+    $GLOBALS['queueTask'] = "local.q";
+    $GLOBALS['NETWORK_IP'] = "172.17.0.1";
+    $GLOBALS['interactive_range_start_port'] = 9001;
+    $GLOBALS['max_parallel_independent_tools'] = 10;
+    $GLOBALS['toolsPath'] = "/tools/";
+    $GLOBALS['tool_json_schema'] = $GLOBALS['root']."/install/data/tool_schemas/tool_specification/tool_schema.json";
+    $GLOBALS['tool_io_json_schema'] = $GLOBALS['root']."/install/data/tool_schemas/tool_specification/tool_schema_io.json";
+    $GLOBALS['tool_dev_sample'] = $GLOBALS['root']."/install/data/tool_schemas/tool_specification/examples/example.json";
+    $GLOBALS['tool_io_dev_sample'] = $GLOBALS['root']."/install/data/tool_schemas/tool_specification/examples/example_io.json";
+    $GLOBALS['compressions'] = array(
+        "zip"=>"ZIP","bz2"=>"BZIP2","gz"=>"GZIP","tgz"=>"TAR,GZIP","tar.gz"=>"TAR,GZIP",
+        "tbz2"=>"TAR,BZIP2","tar.bz2"=>"TAR,BZIP2","tar.Z"=>"TAR,ZIP","rar"=>"RAR","tar"=>"TAR"
+    );
+    $GLOBALS['placeholder_input'] = "Click right button to select file";
+    $GLOBALS['placeholder_textarea'] = "Click right button to select file(s)";
+    $GLOBALS['cloud'] = "local";
+    $GLOBALS['clouds'] = array(
+        "local" => array(
+            "http_host" => "localhost",
+            "dataDir_fs" => "/shared_data/userdata/",
+            "pubDir_fs" => "/shared_data/public/",
+            "dataDir_virtual" => $GLOBALS['dataDir'],
+            "pubDir_virtual" => $GLOBALS['pubDir'],
+            "dataDir_host" => getenv('FRONTEND_HOST_PATH').$GLOBALS['dataDir'],
+            "pubDir_host" => getenv('FRONTEND_HOST_PATH').$GLOBALS['pubDir'],
+            "scriptsDir_host" => getenv('FRONTEND_HOST_PATH').$GLOBALS['shared']."scripts/",
+            "PMESserver_domain" => "localhost",
+            "PMESserver_port" => "80",
+            "PMESserver_address" => "/",
+            "imageTypes" => array(),
+            "auth" => array("required" => False)
+        )
+    );
+    $GLOBALS['ROLES'] = array("0"=>"Admin","1"=>"Tool Dev.","2"=>"Common","3"=>"Anonymous");
+    $GLOBALS['NO_GUEST'] = array(0,1,2,100,101);
+    $GLOBALS['PREMIUM'] = array(0,1);
+    $GLOBALS['ADMIN'] = array(0);
+    $GLOBALS['TOOLDEV'] = array(1);
+    $GLOBALS['ROLES_COLOR'] = array("0"=>"blue","1"=>"grey-cascade","2"=>"",100=>"red-haze",101=>"yellow-haze");
+    $GLOBALS['STATES_COLOR'] = array("0"=>"font-red","1"=>"font-green-meadow","2"=>"font-blue-steel",3=>"font-green-meadow",4=>"font-yellow-mint");
+    $GLOBALS['FILE_MSG_COLOR'] = array("0"=>"note-danger","1"=>"note-info","2"=>"note-success",3=>"note-info");
+    $scheme = "http";
+    if (!empty($_SERVER['HTTP_X_FORWARDED_PROTO'])) {
+        $scheme = trim(explode(",", $_SERVER['HTTP_X_FORWARDED_PROTO'])[0]);
+    } elseif (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== "off") {
+        $scheme = "https";
+    }
+    $host = !empty($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : getenv('SERVER_DOMAIN');
+    $GLOBALS['auth_required'] = True;
+    $GLOBALS['authRealm'] = getenv('KEYCLOAK_REALM');
+    $authServerInternal = rtrim(getenv('KEYCLOAK_SERVER'), '/');
+    $authServerPublic = rtrim(getenv('KEYCLOAK_PUBLIC_URL') ?: getenv('KEYCLOAK_SERVER'), '/');
+    if (!$authServerPublic) {
+        $authServerPublic = $scheme . "://" . $host . "/auth";
+    }
+    $GLOBALS['authServer'] = $authServerInternal;
+    $GLOBALS['urlAuthorize'] = $authServerPublic.'/realms/'.$GLOBALS['authRealm'].'/protocol/openid-connect/auth';
+    $GLOBALS['urlAccessToken'] = $authServerInternal.'/realms/'.$GLOBALS['authRealm'].'/protocol/openid-connect/token';
+    $GLOBALS['urlResourceOwnerDetails'] = $authServerInternal.'/realms/'.$GLOBALS['authRealm'].'/protocol/openid-connect/userinfo';
+    $GLOBALS['urlLogout'] = $authServerPublic.'/realms/'.$GLOBALS['authRealm'].'/protocol/openid-connect/logout';
+    $GLOBALS['adminToken'] = $authServerInternal."/realms/master/protocol/openid-connect/token";
+    $GLOBALS['adminRealm'] = $authServerInternal."/admin/realms/".$GLOBALS['authRealm'];
+    $GLOBALS['URL'] = $scheme . "://" . $host . $GLOBALS['BASEURL'];
+    $GLOBALS['URL_login'] = $GLOBALS['URL']."login.php";
+    $GLOBALS['htmlPath'] = $GLOBALS['root']."/public/";
+    $GLOBALS['htmlib'] = $GLOBALS['htmlPath']."htmlib";
+    $GLOBALS['appsDir'] = $GLOBALS['shared']."apps/soft/";
+    $GLOBALS['internalTools'] = $GLOBALS['shared']."apps/internalTools/";
+    $GLOBALS['tool_submission_file'] = ".submit";
+    $GLOBALS['tool_config_file'] = ".config.json";
+    $GLOBALS['tool_log_file'] = ".tool.log";
+    $GLOBALS['tool_stageout_file'] = ".results.json";
+    $GLOBALS['tool_metadata_file'] = ".input_metadata.json";
+    $GLOBALS['timezone'] = "UTC";
+    $GLOBALS['datetime'] = "Y.M.dd HH:mm";
+    $GLOBALS['logs_datetime'] = "dd.M.Y HH:mm:ss";
+    $GLOBALS['vaultUrl'] = getenv('VAULT_ADDR') . "/" . getenv('VAULT_API_VERSION');
+    $GLOBALS['vaultRolename'] = getenv('VAULT_ROLENAME');
+    $GLOBALS['secretPath'] = getenv('VAULT_SECRET_PATH');
+---
+{{- if .Values.frontend.sharedData.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dashboard-frontend-sgecore-shareddata
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  {{- if .Values.frontend.sharedData.persistence.storageClassName }}
+  storageClassName: {{ .Values.frontend.sharedData.persistence.storageClassName | quote }}
+  {{- end }}
+  accessModes:
+    - {{ .Values.frontend.sharedData.persistence.accessMode | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.frontend.sharedData.persistence.size | quote }}
+---
+{{- end }}
+{{- if .Values.frontend.tools.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dashboard-frontend-tools
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  {{- if .Values.frontend.tools.persistence.storageClassName }}
+  storageClassName: {{ .Values.frontend.tools.persistence.storageClassName | quote }}
+  {{- end }}
+  accessModes:
+    - {{ .Values.frontend.tools.persistence.accessMode | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.frontend.tools.persistence.size | quote }}
+---
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard-frontend
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  type: {{ .Values.frontend.service.type }}
+  ports:
+    - name: web
+      port: {{ .Values.frontend.service.port }}
+      targetPort: {{ .Values.frontend.service.port }}
+      protocol: TCP
+  selector:
+    app: dashboard-frontend
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard-frontend
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+spec:
+  replicas: {{ .Values.frontend.replicaCount }}
+  selector:
+    matchLabels:
+      app: dashboard-frontend
+  template:
+    metadata:
+      labels:
+        app: dashboard-frontend
+        openvre.colocate: "true"
+    spec:
+      serviceAccountName: dashboard-frontend
+      automountServiceAccountToken: false
+      {{- $hostAliases := include "openvre.frontendHostAliases" . }}
+      {{- if $hostAliases }}
+      hostAliases:
+{{ $hostAliases | nindent 8 }}
+      {{- end }}
+      securityContext:
+        fsGroup: {{ .Values.frontend.env.openvreK8sRunAsGid | default "1000" | int }}
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+{{- include "openvre.nodeSelector" . | nindent 6 }}
+{{- include "openvre.tolerations" . | nindent 6 }}
+{{- include "openvre.affinity" . | nindent 6 }}
+      initContainers:
+        - name: dashboard-init-create-shared-folders
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              # Non-root: only create dirs. Ownership comes from pod fsGroup.
+              mkdir -p /shared_data/public /shared_data/userdata /shared_data/admindata
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: {{ .Values.frontend.env.openvreK8sRunAsUid | default "1000" | int }}
+            runAsGroup: {{ .Values.frontend.env.openvreK8sRunAsGid | default "1000" | int }}
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: frontend-sgecore-shareddata
+              mountPath: /shared_data
+      containers:
+        - name: dashboard-frontend
+          image: {{ .Values.images.frontend.repository }}:{{ .Values.images.frontend.tag }}
+          securityContext:
+            # webdevops/php-apache entrypoint + service.d scripts require root to
+            # provision Apache/PHP configs (gosu root, go-replace writes). Full
+            # non-root needs a rebuilt image; init container is already non-root.
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+          command:
+            - bash
+            - -c
+            - |
+              export MONGO_CREDENTIALS="${MONGO_INITDB_USERNAME}:${MONGO_INITDB_PASSWORD}"
+              sed -i "s/\$authorizationUrl = \$provider->getAuthorizationUrl();/\$authorizationUrl = \$provider->getAuthorizationUrl(['scope' => \"openid profile email\"]);/" /var/www/html/openVRE/public/applib/loginToken.php || true
+              # Ensure UI plugins exist even if image was built without baking them in.
+              if [ ! -f /var/www/html/openVRE/public/assets/global/plugins/jquery.min.js ] && [ -d /var/www/html/openVRE/plugins-to-copy ]; then
+                mkdir -p /var/www/html/openVRE/public/assets/global/plugins
+                cp -a /var/www/html/openVRE/plugins-to-copy/. /var/www/html/openVRE/public/assets/global/plugins/
+              fi
+              /opt/docker/bin/entrypoint.sh supervisord
+          envFrom:
+            - configMapRef:
+                name: dashboard-frontend-env
+          env:
+            - name: OPENVRE_K8S_SCHEDULER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.scheduler.authSecretName }}
+                  key: {{ .Values.scheduler.authSecretKey }}
+            {{- if .Values.interactive.password }}
+            - name: OPENVRE_INTERACTIVE_PASSWORD
+              value: {{ .Values.interactive.password | quote }}
+            {{- end }}
+            - name: KEYCLOAK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: dashboard-frontend-passwords-secrets
+                  key: KEYCLOAK_SECRET
+            - name: MAIL_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: dashboard-frontend-passwords-secrets
+                  key: MAIL_PASS
+            - name: KEYCLOAK_REALM
+              value: {{ .Values.keycloak.realm | quote }}
+            - name: MONGO_TLS_MODE
+              value: {{ .Values.dashboardMongo.env.tlsMode | quote }}
+            - name: MONGO_MAIN_DB
+              value: {{ .Values.dashboardMongo.env.mainDb | quote }}
+            - name: MONGO_INITDB_USERNAME
+              value: {{ .Values.secrets.dashboardMongo.appUser | quote }}
+            - name: MONGO_INITDB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: dashboard-mongodb-password
+                  key: MONGO_INITDB_PASSWORD
+          resources:
+            {{- toYaml .Values.frontend.resources | nindent 12 }}
+          volumeMounts:
+            - name: frontend-sgecore-shareddata
+              mountPath: /shared_data
+            - name: frontend-tools
+              mountPath: /var/www/html/openVRE/public/tools
+            - name: conf
+              mountPath: /var/www/html/openVRE/config/globals.inc.php
+              subPath: globals.inc.php
+            {{- if .Values.components.sgecore.enabled }}
+            - name: conf
+              mountPath: /var/lib/gridengine/default/common/act_qmaster
+              subPath: act_qmaster
+            {{- end }}
+            - name: apache-conf
+              mountPath: /opt/docker/etc/httpd/conf.d/10-server.conf
+              subPath: server.conf
+      volumes:
+        - name: frontend-sgecore-shareddata
+          persistentVolumeClaim:
+            claimName: dashboard-frontend-sgecore-shareddata
+        - name: frontend-tools
+          persistentVolumeClaim:
+            claimName: dashboard-frontend-tools
+        - name: apache-conf
+          configMap:
+            name: dashboard-frontend-apache-conf
+            items:
+              - key: server.conf
+                path: server.conf
+        - name: conf
+          configMap:
+            name: dashboard-frontend-config
+            items:
+              - key: globals.inc.php
+                path: globals.inc.php
+              {{- if .Values.components.sgecore.enabled }}
+              - key: act_qmaster
+                path: act_qmaster
+              {{- end }}
+---
+{{- if .Values.frontend.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dashboard-frontend
+  labels:
+    app.kubernetes.io/part-of: bsc-tre
+  annotations:
+    # Interactive session ingresses use priority 100; keep app catch-all lower.
+    nginx.ingress.kubernetes.io/priority: "10"
+spec:
+  ingressClassName: {{ .Values.domain.ingressClassName | quote }}
+  rules:
+    {{- if .Values.domain.host }}
+    - host: {{ .Values.domain.host | quote }}
+      http:
+        paths:
+          {{- if .Values.components.keycloak.enabled }}
+          - path: /auth
+            pathType: Prefix
+            backend:
+              service:
+                name: dashboard-keycloak
+                port:
+                  number: {{ .Values.keycloak.service.port }}
+          {{- end }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: dashboard-frontend
+                port:
+                  number: {{ .Values.frontend.service.port }}
+    {{- else }}
+    - http:
+        paths:
+          {{- if .Values.components.keycloak.enabled }}
+          - path: /auth
+            pathType: Prefix
+            backend:
+              service:
+                name: dashboard-keycloak
+                port:
+                  number: {{ .Values.keycloak.service.port }}
+          {{- end }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: dashboard-frontend
+                port:
+                  number: {{ .Values.frontend.service.port }}
+    {{- end }}
+{{- if .Values.domain.tlsEnabled }}
+  tls:
+    - hosts:
+        - {{ .Values.domain.host | quote }}
+      secretName: {{ .Values.domain.tlsSecretName | quote }}
+{{- end }}
+{{- end }}
+{{- end }}

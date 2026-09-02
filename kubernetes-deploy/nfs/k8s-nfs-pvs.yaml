@@ -1,0 +1,94 @@
+# Static NFS PVs for per-project userdata + admindata volumes.
+# NFS server: control plane
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: project-a-userdata-nfs
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: Immediate
+reclaimPolicy: Retain
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: project-a-admindata-nfs
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: Immediate
+reclaimPolicy: Retain
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: project-b-userdata-nfs
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: Immediate
+reclaimPolicy: Retain
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: project-b-admindata-nfs
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: Immediate
+reclaimPolicy: Retain
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-proj-a-userdata
+spec:
+  capacity:
+    storage: 25Gi
+  accessModes: ["ReadWriteMany"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: project-a-userdata-nfs
+  mountOptions: ["vers=4.2"]
+  nfs:
+    server: 192.168.0.68
+    path: /export/proj-a-userdata
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-proj-a-admindata
+spec:
+  capacity:
+    storage: 25Gi
+  accessModes: ["ReadWriteMany"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: project-a-admindata-nfs
+  mountOptions: ["vers=4.2"]
+  nfs:
+    server: 192.168.0.68
+    path: /export/proj-a-admindata
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-proj-b-userdata
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes: ["ReadWriteMany"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: project-b-userdata-nfs
+  mountOptions: ["vers=4.2"]
+  nfs:
+    server: 192.168.0.68
+    path: /export/proj-b-userdata
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-proj-b-admindata
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes: ["ReadWriteMany"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: project-b-admindata-nfs
+  mountOptions: ["vers=4.2"]
+  nfs:
+    server: 192.168.0.68
+    path: /export/proj-b-admindata

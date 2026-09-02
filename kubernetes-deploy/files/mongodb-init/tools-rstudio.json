@@ -1,0 +1,68 @@
+[
+  {
+    "_id": "rstudio",
+    "name": "Rstudio Tool",
+    "title": "Rstudio Session",
+    "short_description": "Interactive RStudio environment for data analysis in OpenVRE",
+    "long_description": "Launch an interactive RStudio session. Each session gets a dedicated URL under /{your-user-id}/{session-id}/ on this portal.",
+    "url": "https://posit.co/products/open-source/rstudio/",
+    "publication": "",
+    "owner": {
+      "author": "Maria Paola Ferri",
+      "institution": "Barcelona Supercomputing Center",
+      "contact": "maria.ferri@bsc.es",
+      "url": ""
+    },
+    "status": 1,
+    "external": true,
+    "keywords": [
+      "rstudio"
+    ],
+    "infrastructure": {
+      "memory": 2,
+      "cpus": 1,
+      "interactive": true,
+      "executable": "",
+      "container_image": "ymaqsoodbsc/openvre-kubernetes:rstudio-init-wrapper-2",
+      "container_port": "8787",
+      "proxy": {
+        "root_path_mode": "custom_header",
+        "root_path_header": "X-RStudio-Root-Path",
+        "extra_headers": {
+          "X-Forwarded-Proto": "http"
+        }
+      },
+      "clouds": {
+        "local": {
+          "launcher": "kubernetes_native",
+          "default_cloud": true,
+          "queue": "local.q"
+        }
+      },
+      "volumes": {
+        "/rstudio_data": "/home/rstudio/workspace",
+        "/repository": "/home/rstudio/repository"
+      }
+    },
+    "input_files": [],
+    "input_files_public_dir": [],
+    "input_files_combinations": [
+      {
+        "description": "Start an RStudio session",
+        "input_files": []
+      }
+    ],
+    "arguments": [],
+    "has_custom_viewer": false,
+    "output_files": [],
+    "sites": [
+      {
+        "site_id": "local",
+        "status": 1
+      }
+    ],
+    "input_files_combinations_internal": [
+      []
+    ]
+  }
+]
