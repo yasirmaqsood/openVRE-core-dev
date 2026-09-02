@@ -75,6 +75,10 @@ services:
       KEYCLOAK_REALM: ${KEYCLOAK_REALM}
       KEYCLOAK_SECRET: ${KEYCLOAK_SECRET}
       KEYCLOAK_SERVER: ${KEYCLOAK_SERVER}
+      INCLUDE_EGA_DATASETS: ${INCLUDE_EGA_DATASETS}
+      INCLUDE_EXTERNAL_DATASETS: ${INCLUDE_EXTERNAL_DATASETS}
+      INCLUDE_HPC_DATASETS: ${INCLUDE_HPC_DATASETS}
+      INCLUDE_OPENSTACK_DATASETS: ${INCLUDE_OPENSTACK_DATASETS}
       MAIL_HOST: ${MAIL_HOST}
       MAIL_USER: ${MAIL_USER}
       MAIL_PASS: ${MAIL_PASS}
@@ -96,7 +100,7 @@ services:
       - ./front_end/openVRE/data:/var/www/html/openVRE/data
       - ./front_end/openVRE/apache/check_tool_access.lua:/opt/docker/etc/httpd/check_tool_access.lua
       - ./front_end/openVRE/apache/server.conf:/opt/docker/etc/httpd/conf.d/10-server.conf
-      - ./tools/front:/var/www/html/openVRE/public/tools/front
+      - ./tools:/var/www/html/openVRE/public/tools
       - ./shared_data:/shared_data
     ports:
       - "${FRONTEND_PORT}:80"

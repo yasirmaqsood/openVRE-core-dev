@@ -3,9 +3,7 @@
 use League\OAuth2\Client\Token\AccessToken;
 use OpenVRE\LoggerFactory;
 use OpenVRE\NotFoundException;
-use OpenVRE\Oauth2Provider;
 use OpenVRE\UserType;
-use OpenVRE\VaultClient;
 
 
 function getProjectLogger()
@@ -18,6 +16,7 @@ function getProjectLogger()
 
 	return $logger;
 }
+
 
 function prepUserWorkSpace($homeDir, $projectDir, $sampleData = "", $projectData = array(), $verbose = false, $asRoot = 0)
 {
@@ -661,13 +660,7 @@ function printTable($filesAll = array())
 		print "<input type=\"hidden\" id=\"autorefresh\" value=\"$autorefresh\"/>\n";
 	}
 
-	// Convert the PHP array to JSON and output it to the browser console
 	?>
-	<script>
-		var filesAll = <?php echo json_encode($filesAll); ?>;
-		console.log(filesAll);
-	</script>
-
 <?php
 }
 
@@ -1037,13 +1030,11 @@ function formatData($data)
 		$tList = getToolsByDT($data['data_type'], 1);
 		$data['tools_list'] = '<ul class="dropdown-menu pull-right" role="menu">';
 		if (sizeof($tList) > 0) {
-			$toolsFrontDir = __DIR__ . '/../tools/front/';
-			$defaultIconPath = $toolsFrontDir . 'tool_skeleton/assets/ws/icon.php';
-			$defaultIcon = is_file($defaultIconPath) ? file_get_contents($defaultIconPath) : '';
+			$toolsFrontDir = __DIR__ . '/../tools/';
 			foreach ($tList as $t) {
-				$iconPath = $toolsFrontDir . $t[0] . '/assets/ws/icon.php';
-				$icon = is_file($iconPath) ? file_get_contents($iconPath) : $defaultIcon;
-				$data['tools_list'] .= '<li><a href="tools/front/' . $t[0] . '/input.php?fn[]=' . $data['_id_URL'] . '" class="' . $t[0] . '">' . $icon . ' ' . $t[1] . '</a></li>';
+				$iconPath = $toolsFrontDir . $t[0] . '/front/assets/ws/icon.php';
+				$icon = file_get_contents($iconPath);
+				$data['tools_list'] .= '<li><a href="tools/' . $t[0] . '/front/input.php?fn[]=' . $data['_id_URL'] . '" class="' . $t[0] . '">' . $icon . ' ' . $t[1] . '</a></li>';
 			}
 			$data['tools_button'] = 'block';
 		} else {
@@ -1190,7 +1181,7 @@ function formatData($data)
 	if (isset($data['input_files']) && isset($data['tool'])) {
 		$tool = $GLOBALS['toolsCol']->findOne(array('_id' => $data['tool']));
 		if (!empty($tool)) {
-			$formPath  = "tools/front/" . $data['tool'] . "/input.php";
+			$formPath  = "tools/" . $data['tool'] . "/front/input.php";
 			$data['rerunLink'] = "<li><a href=\"$formPath?rerunDir=" . $data['_id_URL'] . "\"><i class=\"fa fa-share\"></i> Rerun Project</a></li>";
 		}
 	}
@@ -1295,6 +1286,7 @@ function updatePendingFiles($sessionId)
 				// and consequently reload workspace (checkPendingJobs.php)
 			} else {
 				getProjectLogger()->info("Automatic job update detects job $pid is not running anymore");
+				LoggerFactory::getPersistentLogger()->info("Automatic job update detects job {pid} is not running anymore", array('pid' => $pid));
 				$SGE_updated[$pid] = $job;
 				$SGE_updated[$pid]['state'] = "NOT_RUNNING";
 			}
@@ -1371,6 +1363,7 @@ function processRunningJobInfo($job, $jobProcess, $pid, $title, $descrip, &$file
 function processFinishedJobInfo($job, $pid, $title, &$filesPending)
 {
 	getProjectLogger()->info("Workspace reload detects job $pid is not running anymore");
+	LoggerFactory::getPersistentLogger()->info("Workspace reload detects job {pid} is not running anymore", array('pid' => $pid));
 
 	unset($_SESSION['errorData']);
 	$job_in_err = 0;
@@ -1381,6 +1374,7 @@ function processFinishedJobInfo($job, $pid, $title, &$filesPending)
 		getProjectLogger()->error("Tool '" . $job['toolId'] . "' received from JobTool not registered");
 		getProjectLogger()->error("Cannot obtain results from '$title' in folder '" . basename($job['working_dir']) . "'. Job metadata is not valid.");
 		getProjectLogger()->error("Failed to register $pid job outfiles. Job metadata has toolId '" . $job['toolId'] . "'");
+		LoggerFactory::getPersistentLogger()->error("Failed to register {pid} job outfiles. Tool {toolId} not registered.", array('pid' => $pid, 'toolId' => $job['toolId']));
 		$job_in_err = 1;
 		return;
 	}
@@ -1392,6 +1386,7 @@ function processFinishedJobInfo($job, $pid, $title, &$filesPending)
 	getProjectLogger()->debug("Finished building output from toolINFO + stageout_file + stageout_data: " . json_encode($outs_files));
 	if (empty($outs_files)) {
 		getProjectLogger()->warning("Failed to register $pid job outfiles. Output file list empty.");
+		LoggerFactory::getPersistentLogger()->warning("Failed to register {pid} job outfiles. Output file list empty.", array('pid' => $pid));
 		$job_in_err = 1;
 	}
 
@@ -1429,7 +1424,7 @@ function processFinishedJobInfo($job, $pid, $title, &$filesPending)
 						print "<br/>Recovering path from remote_paths: $remote_path<br/>";
 						$_SESSION['errorData']['Error'][] = "Recovering path from remote_paths: $remote_path";
 					}
-					// this is right (?)
+					
 					$out_data['path'] = $remote_path;
 				} else {
 					if ($is_required) {
@@ -1438,7 +1433,7 @@ function processFinishedJobInfo($job, $pid, $title, &$filesPending)
 						$msg .= ". No 'path' and no usable 'remote_paths' found.";
 						$msg .= ". Job metadata: " . print_r($out_data, true);
 						$_SESSION['errorData']['Error'][] = $msg;
-						log_addOutregister($pid, $msg);
+						LoggerFactory::getPersistentLogger()->error("Job output file {outName} not created.", array('outName' => $out_name));
 						$job_in_err = 1;
 					}
 					continue;
@@ -1496,8 +1491,9 @@ function processFinishedJobInfo($job, $pid, $title, &$filesPending)
 
 			// job successfully finished and already in mongo. Update medatada
 			if ($fileId) {
-				getProjectLogger()->debug("JOB $pid finished successfully.");
+				getProjectLogger()->info("JOB $pid finished successfully.");
 				getProjectLogger()->debug("Updating only outfile $out_name '$rfn' metadata from job $pid");
+				LoggerFactory::getPersistentLogger()->info("Job {pid} finished successfully.", array('pid' => $pid));
 				list($out_vre, $metadata) = getVREfile_fromFile($out_data);
 				addMetadataToFile($fileId, $metadata);
 			} elseif (is_file($rfn) || is_dir($rfn) || isset($out_data['meta_data']['remote_paths'][0]['remote_path'])) { // job successfully finished but not yet on mongo. Save output
@@ -1562,6 +1558,7 @@ function processFinishedJobInfo($job, $pid, $title, &$filesPending)
 	if ($job_in_err) {
 		getProjectLogger()->error("Failed to register all job outfiles");
 		getProjectLogger()->error("JOB $pid FINISHED but with errors");
+		LoggerFactory::getPersistentLogger()->error("Job {pid} finished with errors. Failed to register all job outfiles.", array('pid' => $pid));
 
 		$logFileP = $job['log_file'];
 		$logFile  = fromAbsPath_toPath($job['log_file']);
@@ -1585,7 +1582,8 @@ function processFinishedJobInfo($job, $pid, $title, &$filesPending)
 			}
 		}
 	} else {
-		getProjectLogger()->debug("JOB $pid finished successfully.");
+		getProjectLogger()->info("JOB $pid finished successfully.");
+		LoggerFactory::getPersistentLogger()->info("Job {pid} finished successfully.", array('pid' => $pid));
 	}
 }
 
@@ -1771,7 +1769,7 @@ function  build_outputs_list($tool, $stageout_job, $stageout_file)
 
 			array_push($stageout_meta[$out['name']], $out);
 		}
-	} elseif ($tool['external'] !== false) {
+	} elseif ($tool['external'] !== false && !$tool['infrastructure']['interactive']) {
 		$_SESSION['errorData']['Warning'][] = date("h:i:s") . ": Tool stageout file '" . $stageout_file . "' is not found";
 		getProjectLogger()->warning("Tool stageout file '" . $stageout_file . "' is not found");
 	}
@@ -1791,20 +1789,6 @@ function  build_outputs_list($tool, $stageout_job, $stageout_file)
 
 			array_push($stageout_data[$out['name']], $out);
 		}
-	}
-	if ($debug) {
-
-		print "\n__________FROM FILE________________\n";
-		print json_encode($stageout_meta, JSON_PRETTY_PRINT);
-
-		print "\n__________FROM JOB________________\n";
-		print json_encode($stageout_data, JSON_PRETTY_PRINT);
-
-		// Merge FILE + JOB (job overrides file)
-		$stageout_meta = array_merge($stageout_meta, $stageout_data);
-
-		print "\n__________MERGED (FILE + JOB)________________\n";
-		print json_encode($stageout_meta, JSON_PRETTY_PRINT);
 	}
 
 	// merging file data from tool and stageout_file
@@ -1928,14 +1912,20 @@ function downloadFile($rfn)
 
 		$fhandle = fopen($rfn, 'r');
 		fseek($fhandle, $offset); // seek to the requested offset, this is 0 if it's not a partial content request
-		$data = fread($fhandle, $length);
 		fclose($fhandle);
 
 		header('HTTP/1.1 206 Partial Content');
 		header('Content-Range: bytes ' . $offset . '-' . ($offset + $length) . '/' . $size);
 	}
-	header("Content-Disposition: attachment;filename=" . $filename);
-	header('Content-Type: ' . $content_type);
+
+	if (strtolower($fileExtension) === 'html' || strtolower($fileExtension) === 'htm') {
+		header("Content-Disposition: inline; filename=\"$filename\"");
+		header("Content-Type: text/html; charset=UTF-8");
+	} else {
+		header("Content-Disposition: attachment; filename=\"$filename\"");
+		header("Content-Type: " . $content_type);
+	}
+
 	header("Accept-Ranges: bytes");
 	header("Pragma: public");
 	header("Expires: -1");
@@ -2296,5 +2286,132 @@ function moveFiles($fns, $target_fn)
 				}
 			}
 		*/
+	}
+}
+
+
+function syncProjectFiles($projects)
+{
+	foreach ($projects as $projectId => $projectAttributes) {
+		$projectFullPath = $GLOBALS['dataDir'] . "/" . $projectAttributes['path'];
+
+		if (!is_dir($projectFullPath)) {
+			continue; // skip projects whose root path doesn't exist
+		}
+
+		syncDirectoryRecursive($projectFullPath, $projectAttributes['path'], $projectId, null);
+	}
+}
+
+
+function syncDirectoryRecursive($fullFolderPath, $relativeFolderPath, $projectId, $parentDirId)
+{
+	$entries = scandir($fullFolderPath);
+
+	foreach ($entries as $entry) {
+		// skip hidden files/folders (this also covers "." and "..")
+		if ($entry[0] === '.') {
+			continue;
+		}
+
+		$relativePath = $relativeFolderPath . "/" . $entry;
+		$fullPath = $fullFolderPath . "/" . $entry;
+
+		if (is_dir($fullPath)) {
+			// skip folders named "run*" (e.g. "run001")
+			if (fnmatch('run*', $entry)) {
+				continue;
+			}
+
+			// ensure this subdirectory itself is registered, then recurse into it
+			$subDirId = ensureDirRegistered($relativePath, $projectId, $parentDirId);
+			syncDirectoryRecursive($fullPath, $relativePath, $projectId, $subDirId);
+		} else {
+			ensureFileRegistered($relativePath, $fullPath, $projectId, $parentDirId);
+		}
+	}
+}
+
+function ensureDirRegistered($relativePath, $projectId, $parentDirId)
+{
+	$existingId = getGSFileId_fromPath($relativePath);
+	if ($existingId) {
+		return $existingId;
+	}
+
+	$dirId = createLabel();
+
+	$mongoDirDocument = array(
+		'_id'       => $dirId,
+		'mtime'     => new MongoDB\BSON\UTCDateTime(strtotime("now") * 1000),
+		'owner'     => $_SESSION['User']['id'],
+		'path'      => $relativePath,
+		'project'   => $projectId,
+		'parentDir' => $parentDirId,
+		'type'      => "dir",
+		'files'     => []
+	);
+
+	$GLOBALS['filesCol']->updateOne(
+		['_id' => $dirId],
+		['$set' => $mongoDirDocument],
+		['upsert' => true]
+	);
+
+	if ($parentDirId) {
+		$GLOBALS['filesCol']->updateOne(
+			['_id' => $parentDirId],
+			['$addToSet' => ['files' => $dirId]]
+		);
+	}
+
+	return $dirId;
+}
+
+function ensureFileRegistered($relativePath, $fullPath, $projectId, $parentDirId)
+{
+	if (getGSFileId_fromPath($relativePath)) {
+		return; // already registered
+	}
+
+	$fileId = createLabel();
+
+	$mongoFileDocument = array(
+		'_id'       => $fileId,
+		'mtime'     => new MongoDB\BSON\UTCDateTime(strtotime("now") * 1000),
+		'owner'     => $_SESSION['User']['id'],
+		'size'      => filesize($fullPath),
+		'path'      => $relativePath,
+		'project'   => $projectId,
+		'parentDir' => $parentDirId,
+		'type'      => "file"
+	);
+
+	$mongoFileMetadataDocument = array(
+		'_id'         => $fileId,
+		'compressed'  => false,
+		'data_type'   => null,
+		'format'      => null,
+		'validated'   => true,
+		'visible'     => true
+	);
+
+	$GLOBALS['filesCol']->updateOne(
+		['_id' => $fileId],
+		['$set' => $mongoFileDocument],
+		['upsert' => true]
+	);
+
+	$GLOBALS['filesMetaCol']->updateOne(
+		['_id' => $fileId],
+		['$set' => $mongoFileMetadataDocument],
+		['upsert' => true]
+	);
+
+	if ($parentDirId) {
+		$GLOBALS['filesCol']->updateOne(
+			['_id' => $parentDirId],
+			['$addToSet' => ['files' => $fileId]]
+		);
 	}
 }

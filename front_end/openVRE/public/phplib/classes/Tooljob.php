@@ -462,16 +462,28 @@ class Tooljob
 
 				switch ($tool['arguments'][$arg_name]['type']) {
 					case "enum":
-						if (is_null($tool['arguments'][$arg_name]['enum_items']) || (is_null($tool['arguments'][$arg_name]['enum_items']['name']))) {
-							$this->logger->error("Invalid argument enum in tool definition. '$arg_name' has no 'enum_items' or 'enum_items['name]");
-							$_SESSION['errorData']['Internal'][] = "There was an internal error launching the tool.";
-							redirect($GLOBALS['BASEURL'] . "workspace/");
+						//Values as string
+						if (is_array($arg_value)) {
+							$arg_value = reset($arg_value); // take first value
 						}
+						$arg_value = strval($arg_value);
 
-						if (!in_array($arg_value, $tool['arguments'][$arg_name]['enum_items']['name'])) {
-							$this->logger->error("Invalid argument. In '$arg_name' these values are accepted [" . implode(", ", $tool['arguments'][$arg_name]['enum_items']['name']) . "], but found $arg_value");
-							$_SESSION['errorData']['Internal'][] = "There was an internal error launching the tool.";
-							redirect($GLOBALS['BASEURL'] . "workspace/");
+						//If enum exists then validate
+
+						if (isset($tool['arguments'][$arg_name]['enum_items']) && (isset($tool['arguments'][$arg_name]['enum_items']['name']))) {
+							if (!in_array($arg_value, $tool['arguments'][$arg_name]['enum_items']['name'])) {
+								$this->logger->error("Invalid argument. In '$arg_name' these values are accepted [" . implode(", ", $tool['arguments'][$arg_name]['enum_items']['name']) . "], but found $arg_value");
+								$_SESSION['errorData']['Error'][] = "Invalid argument. In '$arg_name' these values are accepted [" . implode(", ", $tool['arguments'][$arg_name]['enum_items']['name']) . "], but found $arg_value";
+								redirect($GLOBALS['BASEURL'] . "workspace/");
+							}
+						} else {
+							//No enum definition
+							// Treat it as a string
+							if (!is_string($arg_value)) {
+								$this->logger->info("Enum '$arg_name' has no enum_items defined. Treated as string..");
+								$_SESSION['errorData']['Info'][] =
+									"Enum '$arg_name' has no enum_items defined. Treated as string..";
+							}
 						}
 
 						break;
@@ -1050,7 +1062,7 @@ class Tooljob
 	}
 
 
-	protected function setBashCommandDockerSgeInteractive($tool, $cmd_envs)
+	protected function setBashCommandDockerSgeInteractive($tool, $customToolParameters)
 	{
 		$this->job_type = "interactive";
 		$container_port = $tool['infrastructure']['container_port'];
@@ -1060,7 +1072,7 @@ class Tooljob
 			throw new UnexpectedValueException("No free ports available to run the interactive tool.");
 		}
 
-		$networkName = $GLOBALS['networkName'];
+		$networkName = $GLOBALS['NETWORK_NAME'];
 
 		$cmd = <<<EOF
 			CONTAINER_ID=\$(docker run \
@@ -1069,7 +1081,7 @@ class Tooljob
 			-v /var/run/docker.sock:/var/run/docker.sock -d \
 			--name $this->containerName \
 			--net $networkName \
-			$cmd_envs \
+			$customToolParameters \
 			--hostname $this->containerName \
 			-p $hostPort:{$tool['infrastructure']['container_port']} {$tool['infrastructure']['container_image']} {$tool['infrastructure']['executable']});
 		EOF;
@@ -1107,7 +1119,7 @@ class Tooljob
 	}
 
 
-	protected function setBashCommandDockerCompose($tool, $cmd_envs)
+	protected function setBashCommandDockerCompose($tool, $customToolParameters)
 	{
 		$this->job_type = "interactive";
 		$dockerComposeFile = $GLOBALS['toolsPath'] . $tool['infrastructure']['docker_path'];
@@ -1138,7 +1150,28 @@ class Tooljob
 		echo '# End time:' \$(date) >> $this->log_file_virtual;
 		EOF;
 
-		return $cmd . "\n" . $monitorContainer . $cmd_envs;
+		return $cmd . "\n" . $monitorContainer . $customToolParameters;
+	}
+
+
+	protected function isToolRunning()
+	{
+		$ch = curl_init();
+		$defaultInternalPort = 8787;
+		curl_setopt_array($ch, [
+			CURLOPT_URL            => $this->containerName . ":" . $defaultInternalPort,
+			CURLOPT_NOBODY         => true,
+			CURLOPT_TIMEOUT        => 5,
+			CURLOPT_CONNECTTIMEOUT => 5,
+			CURLOPT_RETURNTRANSFER => true,
+			CURLOPT_FOLLOWLOCATION => false,
+		]);
+
+		curl_exec($ch);
+		$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+		curl_close($ch);
+
+		return $httpCode !== 0;
 	}
 
 
@@ -1150,23 +1183,46 @@ class Tooljob
 		}
 
 		$this->containerName = $tool['infrastructure']['container_image'] . "_" . $_SESSION['User']['activeProject'];
-		$cmd_envs = "";
+		$customToolParameters = "";
 		$envReplacements = ['$this->containerName' => $this->containerName];
 		foreach ($tool['infrastructure']['container_env'] as $env_key => $env_value) {
 			$env_value = str_replace(array_keys($envReplacements), array_values($envReplacements), $env_value);
-			$cmd_envs .= "-e $env_key=$env_value ";
+			$customToolParameters .= "-e $env_key=$env_value ";
 		}
 
 		foreach ($tool['infrastructure']['volumes'] as $hostDir => $containerDir) {
 			$userHomeDir = $this->root_dir_volumes . "/" . $this->project;
-			$cmd_envs .= "-v $userHomeDir" . "$hostDir:$containerDir ";
+			$customToolParameters .= "-v $userHomeDir" . "$hostDir:$containerDir ";
+
+			$user = getUserById($_SESSION['User']['_id']);
+			$dataDir = $user['id'] . "/" . $user['activeProject'];
+			$upDirId  = createGSDirBNS($dataDir . $hostDir, 1);
+			getProjectLogger()->info("Creating directory:" . $dataDir . $hostDir . "($upDirId)");
+			addMetadataToFile($upDirId, array(
+				"expiration" => -1,
+				"description" => "Uploaded personal data"
+			));
+
+			$dataDirP  = $GLOBALS['dataDir'] . "/$dataDir";
+			if (!is_dir("$dataDirP" . $hostDir)) {
+				mkdir("$dataDirP" . $hostDir, 0775);
+			}
+		}
+
+		if (!empty($tool['infrastructure']['user'])) {
+			$customToolParameters .= "--user " . escapeshellarg($tool['infrastructure']['user'] . " ");
 		}
 
 		if ($tool['infrastructure']['interactive']) {
 			if ($tool['infrastructure']['docker_type'] == "compose") {
-				$cmd = $this->setBashCommandDockerCompose($tool, $cmd_envs);
+				$cmd = $this->setBashCommandDockerCompose($tool, $customToolParameters);
 			} else {
-				$cmd = $this->setBashCommandDockerSgeInteractive($tool, $cmd_envs);
+				if ($this->isToolRunning()) {
+					$toolUrl = $GLOBALS['URL'] . "interactive-tool/" . $this->containerName . "/";
+					$_SESSION['errorData']['Error'][] = "There is already a running instance of this tool at: <a href='$toolUrl' target='_blank'>" . $toolUrl . "</a>";
+				}
+
+				$cmd = $this->setBashCommandDockerSgeInteractive($tool, $customToolParameters);
 			}
 		} else {
 			$cmd_vre = $tool['infrastructure']['executable'] .
@@ -1177,7 +1233,7 @@ class Tooljob
 
 
 			$cmd =  "docker run --privileged -v /var/run/docker.sock:/var/run/docker.sock -d" .
-				" " . $cmd_envs .
+				" " . $customToolParameters .
 				"--memory=" . $tool['infrastructure']['memory'] . "g" .
 				" -v " . $this->pub_dir_volumes . ":" . $GLOBALS['shared'] . "public_tmp/ " .
 				" -v " . $this->root_dir_volumes . ":" . $GLOBALS['shared'] . "userdata_tmp/{$_SESSION['User']['id']}" .
@@ -1246,9 +1302,9 @@ class Tooljob
 			" --out_metadata " . $this->stageout_file_virtual .
 			" --log_file "     . $this->log_file_virtual;
 
-		$cmd_envs = "";
+		$customToolParameters = "";
 		foreach ($tool['infrastructure']['container_env'][0] as $env_key => $env_value) {
-			$cmd_envs .= "-e $env_key=$env_value ";
+			$customToolParameters .= "-e $env_key=$env_value ";
 		}
 
 		$vaultKey = $_SESSION['userVaultInfo']['vaultKey'];
@@ -1263,7 +1319,7 @@ class Tooljob
 		}
 
 		$cmd = "docker run --device /dev/fuse --security-opt apparmor:unconfined --cap-add SYS_ADMIN -v /var/run/docker.sock:/var/run/docker.sock " .
-			" " . $cmd_envs .
+			" " . $customToolParameters .
 			" -v " . $this->pub_dir_host .                            ":" . $GLOBALS['shared'] . "public_tmp/ " .
 			" -v " . $this->root_dir_host . "/" . $_SESSION['User']['id'] . ":" . $GLOBALS['shared'] . "userdata_tmp/" . $_SESSION['User']['id'] .
 			" --tmpfs " . "/clean_files:rw,uid=1000,gid=1000" .
@@ -1450,6 +1506,7 @@ class Tooljob
 
 		$pid = execJob($this->working_dir, $this->submission_file, $queue, $cpus, $memory,  $this->stdout_file, $this->stderr_file, $jobManager, $this->toolId, $jobOptions);
 		$this->logger->info("Tool job submitted to SGE queue '$queue' (PID=$pid)");
+		LoggerFactory::getPersistentLogger()->info("Job {pid} for tool {toolId} submitted to SGE queue {queue}", array("toolId" => $this->toolId, "queue" => $queue, "pid" => $pid));
 
 		$this->pid = $pid;
 		return $pid;
