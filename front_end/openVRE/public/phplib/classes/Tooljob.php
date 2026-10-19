@@ -1515,7 +1515,7 @@ class Tooljob
 
 	protected function enqueueInteractiveK8s($tool, $cpus, $memory)
 	{
-		$process = new ProcessK8sInteractive();
+		$process = new ProcessK8s();
 		$userId = $_SESSION['User']['id'] ?? "";
 		if (!$process->createSession($tool, $userId, "", array(
 			"working_dir" => $this->working_dir,
