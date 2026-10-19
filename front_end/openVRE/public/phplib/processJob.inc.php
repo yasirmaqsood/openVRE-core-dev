@@ -3,7 +3,6 @@
 use OpenVRE\LoggerFactory;
 use OpenVRE\NotFoundException;
 use OpenVRE\ProcessK8s;
-use OpenVRE\ProcessK8sInteractive;
 use OpenVRE\ProcessSGE;
 use OpenVRE\ProcessSlurm;
 
@@ -113,7 +112,7 @@ function getRunningJobInfo($pid, $launcherType = null)
         $process = new ProcessSGE();
         $job = $process->getRunningJobInfo($pid);
     } elseif ($launcherType == "kubernetes_interactive") {
-        $process = new ProcessK8sInteractive();
+        $process = new ProcessK8s();
         $job = $process->getRunningJobInfo($pid);
     } elseif ($launcherType == "kubernetes_native") {
         $process = new ProcessK8s();
@@ -235,7 +234,7 @@ function delJob($pid, $launcherType = null, $login = null)
     }
 
     if ($launcherType === "kubernetes_interactive") {
-        $processIx = new ProcessK8sInteractive();
+        $processIx = new ProcessK8s();
         list($ok, $msg) = $processIx->stop($pid);
         if (!$ok) {
             getJobProcessLogger()->error("delJob kubernetes_interactive pid=$pid failed: $msg");
