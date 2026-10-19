@@ -288,7 +288,7 @@ interactive:
       size: 25Gi
   auditSidecar:
     enabled: true
-    image: "python:3.11-alpine"
+    image: "ghcr.io/inab/k8-openvre-audit-sidecar:1.0"
     intervalSec: "5"
     # Admin-only audit root (outside userdata). Layout:
     # admindata/<tool>/<user>/<k8s-name>/
