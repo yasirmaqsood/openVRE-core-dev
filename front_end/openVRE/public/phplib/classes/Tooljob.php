@@ -1514,8 +1514,46 @@ class Tooljob
 	}
 
 
+	protected function registerToolVolumeDirs($tool)
+	{
+		if (empty($tool['infrastructure']['volumes']) || !is_array($tool['infrastructure']['volumes'])) {
+			return;
+		}
+
+		$user = getUserById($_SESSION['User']['_id']);
+		$dataDir = $user['id'] . "/" . $user['activeProject'];
+		$dataDirP = $GLOBALS['dataDir'] . "/" . $dataDir;
+
+		foreach ($tool['infrastructure']['volumes'] as $hostDir => $containerDir) {
+			if (!is_string($hostDir) || $hostDir === "") {
+				continue;
+			}
+
+			$upDirId = createGSDirBNS($dataDir . $hostDir, 1);
+			getProjectLogger()->info("Creating directory:" . $dataDir . $hostDir . "($upDirId)");
+			addMetadataToFile($upDirId, array(
+				"expiration" => -1,
+				"description" => "Uploaded personal data"
+			));
+
+			$parentDirId = getGSFileId_fromPath(dirname($dataDir . $hostDir), 1);
+			if ($parentDirId && $upDirId) {
+				$GLOBALS['filesCol']->updateOne(
+					['_id' => $parentDirId],
+					['$addToSet' => ['files' => $upDirId]]
+				);
+			}
+
+			if (!is_dir($dataDirP . $hostDir)) {
+				mkdir($dataDirP . $hostDir, 0775);
+			}
+		}
+	}
+
+
 	protected function enqueueInteractiveK8s($tool, $cpus, $memory)
 	{
+		$this->registerToolVolumeDirs($tool);
 		$process = new ProcessK8s();
 		$userId = $_SESSION['User']['id'] ?? "";
 		if (!$process->createSession($tool, $userId, "", array(
