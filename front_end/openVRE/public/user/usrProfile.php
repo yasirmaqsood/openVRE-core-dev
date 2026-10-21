@@ -254,8 +254,8 @@ $includeOpenStack = getenv('INCLUDE_OPENSTACK_DATASETS') === 'true';
                                                                 data-provides="fileinput">
                                                                 <div class="fileinput-new thumbnail"
                                                                     style="width: 200px; height: 150px;">
-                                                                    <img src="https://www.placehold.it/200x150/EFEFEF/AAAAAA&amp;text=select+image"
-                                                                        alt="" />
+                                                                    <img src="../assets/layouts/layout/img/select-image-placeholder.svg"
+                                                                        alt="select image" />
                                                                 </div>
                                                                 <div class="fileinput-preview fileinput-exists thumbnail"
                                                                     style="max-width: 150px; height: auto;">

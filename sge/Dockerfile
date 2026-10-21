@@ -1,5 +1,5 @@
 # Use an official Debian image as the base image
-FROM debian:bullseye-20241111-slim
+FROM debian:bookworm-20260824-slim
 
 # Set non-interactive mode for apt-get
 ENV DEBIAN_FRONTEND noninteractive
@@ -28,7 +28,7 @@ RUN echo \
     $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
     tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-ENV DOCKER_VERSION_STRING=5:26.1.4-1~debian.11~bullseye
+ENV DOCKER_VERSION_STRING=5:26.1.4-1~debian.12~bookworm
 RUN apt-get update
 RUN apt-get install -y docker-ce=$DOCKER_VERSION_STRING docker-ce-cli=$DOCKER_VERSION_STRING containerd.io docker-buildx-plugin docker-compose-plugin
 
@@ -53,10 +53,6 @@ RUN apt-get update -y && apt-get install -y gridengine-exec gridengine-master gr
 RUN useradd -m application \
     && echo "application:application" | chpasswd
 
-# Make sure host and container share the same GID for group 'docker', bc it has reading permissions to the socket file
-ARG DOCKER_GROUP
-RUN groupmod -g $DOCKER_GROUP docker
-RUN usermod -aG docker application
 
 # Add setup script and set permissions
 ADD setup_gridengine.sh /usr/local/bin/setup_gridengine.sh
