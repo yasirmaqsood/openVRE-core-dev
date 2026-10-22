@@ -116,6 +116,21 @@ function setUserWorkSpace($homeDir, $projectDir, $projectData, $sampleData, $ver
 				mkdir("$dataDirP/repository", 0775);
 			}
 
+			// RStudio workspace .
+			$rstudioDirId = createGSDirBNS($dataDir . "/rstudio_data", 1);
+			getProjectLogger()->info("Creating rstudio_data directory: $dataDir/rstudio_data ($rstudioDirId)");
+			if ($rstudioDirId == "0") {
+				getProjectLogger()->error("Cannot create rstudio_data directory in $dataDir");
+				return 0;
+			}
+			addMetadataToFile($rstudioDirId, array(
+				"expiration" => -1,
+				"description" => "User personal data"
+			));
+			if (!is_dir("$dataDirP/rstudio_data")) {
+				mkdir("$dataDirP/rstudio_data", 0775);
+			}
+
 			// injecting sample data
 			setUserWorkSpace_sampleData($sampleData, $dataDir, $verbose);
 		}
