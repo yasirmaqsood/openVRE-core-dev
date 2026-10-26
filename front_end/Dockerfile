@@ -1,5 +1,5 @@
 # Dockerfile
-FROM webdevops/php-apache:8.3
+FROM webdevops/php-apache@sha256:6d0becbcf94f706722e79829be05d5de2cf01464455b7b3aafc9f0d087b84983
 
 ARG DEBIAN_FRONTEND=noninteractive
 
