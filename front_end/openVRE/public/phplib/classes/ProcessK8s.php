@@ -793,8 +793,19 @@ class ProcessK8s
         $memory = max(1, $memoryGb) . "Gi";
         $cpu = $cpus >= 2 ? (string)$cpus : (max(1, $cpus) * 500 . "m");
 
+        $interactiveAccess = (isset($infra['interactive_access']) && is_array($infra['interactive_access']))
+            ? $infra['interactive_access']
+            : array();
+        $guacamoleMode = strtolower(trim((string)($interactiveAccess['mode'] ?? ''))) === 'guacamole';
+
         $containerPort = isset($infra['container_port']) ? (int)$infra['container_port'] : 0;
-        if ($containerPort <= 0) {
+        if ($guacamoleMode) {
+            $containerPort = (int)($interactiveAccess['port'] ?? 0);
+            if ($containerPort <= 0) {
+                $this->stderr = "Guacamole interactive tool is missing interactive_access.port";
+                return false;
+            }
+        } elseif ($containerPort <= 0) {
             $containerPort = (int)(getenv("OPENVRE_INTERACTIVE_DEFAULT_PORT") ?: 0);
         }
         if ($containerPort <= 0) {
@@ -888,6 +899,9 @@ class ProcessK8s
         if (!empty($proxy)) {
             $payload["proxy"] = $proxy;
         }
+        if (!empty($interactiveAccess)) {
+            $payload["interactive_access"] = $interactiveAccess;
+        }
 
         $response = $this->schedulerRequest("POST", "/interactive-sessions", $payload);
         if ($response["ok"] !== true) {
@@ -901,6 +915,18 @@ class ProcessK8s
         if ($this->pid === "") {
             $this->stderr = "scheduler returned empty session name";
             return false;
+        }
+        if ($guacamoleMode) {
+            $protocol = strtolower(trim((string)($interactiveAccess['protocol'] ?? 'vnc')));
+            if ($protocol === "") {
+                $protocol = "vnc";
+            }
+            $link = $this->createGuacamoleLink($this->pid, $containerPort, $protocol);
+            if ($link === "") {
+                $this->stopInteractive($this->pid);
+                return false;
+            }
+            $this->accessUrl = $link;
         }
         return true;
     }
@@ -940,6 +966,11 @@ class ProcessK8s
         if ($this->namespace === "") {
             return array(false, "OPENVRE_K8S_NAMESPACE is not set");
         }
+        try {
+            $this->deleteGuacamoleConnection($pid);
+        } catch (\Exception $e) {
+            $this->stderr = $e->getMessage();
+        }
         $response = $this->schedulerRequest(
             "DELETE",
             "/interactive-sessions/" . rawurlencode($pid) . "?namespace=" . rawurlencode($this->namespace)
@@ -948,5 +979,147 @@ class ProcessK8s
             return array(true, trim((string)($response["data"]["stdout"] ?? "")));
         }
         return array(false, $response["error"] ?: "Failed to delete interactive session");
+    }
+
+    private function guacamoleUsername(): string
+    {
+        if (!empty($_SESSION['tokenInfo']['preferred_username'])) {
+            return (string)$_SESSION['tokenInfo']['preferred_username'];
+        }
+        if (!empty($_SESSION['User']['id'])) {
+            return (string)$_SESSION['User']['id'];
+        }
+        return "";
+    }
+
+    private function guacamolePdo(): ?\PDO
+    {
+        $host = getenv('GUACAMOLE_DB_HOST');
+        $name = getenv('GUACAMOLE_DB_NAME');
+        $user = getenv('GUACAMOLE_DB_USER');
+        $pass = getenv('GUACAMOLE_DB_PASSWORD');
+        if ($host === false || $host === '' || $name === false || $name === '' || $user === false || $user === '') {
+            return null;
+        }
+        $port = getenv('GUACAMOLE_DB_PORT');
+        if ($port === false || $port === '') {
+            $port = '3306';
+        }
+        return new \PDO(
+            "mysql:host={$host};port={$port};dbname={$name};charset=utf8mb4",
+            $user,
+            ($pass === false) ? '' : (string)$pass,
+            array(
+                \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
+                \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC,
+                \PDO::ATTR_EMULATE_PREPARES => false,
+            )
+        );
+    }
+
+    private function guacamoleClientToken(int $connectionId): string
+    {
+        $raw = $connectionId . "\0" . "c" . "\0" . "mysql";
+        return rtrim(strtr(base64_encode($raw), '+/', '-_'), '=');
+    }
+
+    private function guacamoleEntityId(\PDO $db, string $username): int
+    {
+        $stmt = $db->prepare(
+            "SELECT entity_id FROM guacamole_entity WHERE name = ? AND type = 'USER'"
+        );
+        $stmt->execute(array($username));
+        $row = $stmt->fetch();
+        if ($row) {
+            return (int)$row['entity_id'];
+        }
+
+        $db->beginTransaction();
+        try {
+            $stmt = $db->prepare("INSERT INTO guacamole_entity (name, type) VALUES (?, 'USER')");
+            $stmt->execute(array($username));
+            $entityId = (int)$db->lastInsertId();
+            $stmt = $db->prepare(
+                "INSERT INTO guacamole_user (entity_id, password_hash, password_salt, password_date)
+                 VALUES (?, UNHEX(?), UNHEX(?), NOW())"
+            );
+            $stmt->execute(array(
+                $entityId,
+                bin2hex(random_bytes(32)),
+                bin2hex(random_bytes(32)),
+            ));
+            $db->commit();
+            return $entityId;
+        } catch (\Exception $e) {
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
+            $stmt = $db->prepare(
+                "SELECT entity_id FROM guacamole_entity WHERE name = ? AND type = 'USER'"
+            );
+            $stmt->execute(array($username));
+            $row = $stmt->fetch();
+            if ($row) {
+                return (int)$row['entity_id'];
+            }
+            throw $e;
+        }
+    }
+
+    private function createGuacamoleLink(string $k8sName, int $port, string $protocol): string
+    {
+        $username = $this->guacamoleUsername();
+        if ($username === "") {
+            $this->stderr = "Cannot create Guacamole connection: no username in the session";
+            return "";
+        }
+        try {
+            $db = $this->guacamolePdo();
+            if ($db === null) {
+                $this->stderr = "GUACAMOLE_DB_HOST, GUACAMOLE_DB_NAME, and GUACAMOLE_DB_USER must be set";
+                return "";
+            }
+            $entityId = $this->guacamoleEntityId($db, $username);
+            $hostname = $k8sName . "." . $this->namespace . ".svc.cluster.local";
+            $db->beginTransaction();
+            $stmt = $db->prepare(
+                "INSERT INTO guacamole_connection (connection_name, protocol) VALUES (?, ?)"
+            );
+            $stmt->execute(array($k8sName, $protocol));
+            $connectionId = (int)$db->lastInsertId();
+            $stmt = $db->prepare(
+                "INSERT INTO guacamole_connection_parameter (connection_id, parameter_name, parameter_value)
+                 VALUES (?, 'hostname', ?)"
+            );
+            $stmt->execute(array($connectionId, $hostname));
+            $stmt = $db->prepare(
+                "INSERT INTO guacamole_connection_parameter (connection_id, parameter_name, parameter_value)
+                 VALUES (?, 'port', ?)"
+            );
+            $stmt->execute(array($connectionId, (string)$port));
+            $stmt = $db->prepare(
+                "INSERT INTO guacamole_connection_permission (entity_id, connection_id, permission)
+                 VALUES (?, ?, 'READ')"
+            );
+            $stmt->execute(array($entityId, $connectionId));
+            $db->commit();
+            return "/guacamole/#/client/" . $this->guacamoleClientToken($connectionId);
+        } catch (\Exception $e) {
+            if (isset($db) && $db instanceof \PDO && $db->inTransaction()) {
+                $db->rollBack();
+            }
+            $this->stderr = "Cannot create Guacamole connection: " . $e->getMessage();
+            return "";
+        }
+    }
+
+    private function deleteGuacamoleConnection(string $k8sName): void
+    {
+        $db = $this->guacamolePdo();
+        if ($db === null || $k8sName === "") {
+            return;
+        }
+        $stmt = $db->prepare("DELETE FROM guacamole_connection WHERE connection_name = ?");
+        $stmt->execute(array($k8sName));
     }
 }

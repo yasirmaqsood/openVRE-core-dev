@@ -912,8 +912,14 @@ class Handler(BaseHTTPRequestHandler):
                 execution = (body.get("execution") or "").strip()
                 audit_host_path = (body.get("audit_host_path") or "").strip()
                 proxy_cfg = body.get("proxy", {}) or {}
+                interactive_access = body.get("interactive_access") or {}
+                if not isinstance(interactive_access, dict):
+                    interactive_access = {}
+                guacamole_mode = str(interactive_access.get("mode") or "").strip().lower() == "guacamole"
                 container_port = body.get("container_port")
-                if container_port is None or container_port == "":
+                if guacamole_mode and interactive_access.get("port") not in (None, ""):
+                    container_port = interactive_access.get("port")
+                elif container_port is None or container_port == "":
                     container_port = OPENVRE_INTERACTIVE_DEFAULT_PORT or None
                 tool_id = body.get("tool_id", "")
                 tool_name = body.get("tool_name", "")
@@ -947,7 +953,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(400, {"ok": False, "error": "working_dir is required"})
                 if container_port is None:
                     return self._json(400, {"ok": False, "error": "container_port is required (body or OPENVRE_INTERACTIVE_DEFAULT_PORT)"})
-                if not OPENVRE_INGRESS_CLASS:
+                if not guacamole_mode and not OPENVRE_INGRESS_CLASS:
                     return self._json(400, {"ok": False, "error": "OPENVRE_INGRESS_CLASS is not set"})
                 if run_as_uid is None or run_as_gid is None:
                     return self._json(400, {"ok": False, "error": "run_as_uid and run_as_gid are required"})
@@ -977,7 +983,6 @@ class Handler(BaseHTTPRequestHandler):
                     ensure_dir(audit_host_path)
 
                 manifests = [
-                    proxy_headers_manifest(name, ns, path_prefix, proxy_cfg),
                     deployment_manifest(
                         name,
                         ns,
@@ -999,12 +1004,14 @@ class Handler(BaseHTTPRequestHandler):
                         audit_host_path if audit_sidecar_enabled() else "",
                     ),
                 ]
-                manifests.extend([
-                    service_manifest(name, ns, container_port),
-                    ingress_manifest(
-                        name, ns, path_prefix, name, external_base, container_port
-                    ),
-                ])
+                manifests.append(service_manifest(name, ns, container_port))
+                if not guacamole_mode:
+                    manifests.insert(0, proxy_headers_manifest(name, ns, path_prefix, proxy_cfg))
+                    manifests.append(
+                        ingress_manifest(
+                            name, ns, path_prefix, name, external_base, container_port
+                        )
+                    )
 
                 for manifest in manifests:
                     kind = manifest["kind"]
