@@ -89,6 +89,8 @@ data:
         {{- end }}
     # Legacy bookmarks: tools/front/{id}/ -> tools/{id}/front/
     RewriteEngine on
+    # Docker handles this path in mod_auth_openidc. This image logs in through PHP.
+    RewriteRule ^/redirect_uri$ /applib/oidcLogout.php [L]
     RewriteRule ^/tools/front/([^/]+)/(.*)$ /tools/$1/front/$2 [R=302,L]
     # Legacy bookmarks: /tools/rstudio/input.php -> /tools/rstudio/front/input.php
     RewriteCond %{REQUEST_URI} !^/tools/rstudio/front/
