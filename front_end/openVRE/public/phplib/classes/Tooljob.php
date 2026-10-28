@@ -1573,7 +1573,8 @@ class Tooljob
 		$this->pid = $process->getPid();
 		$this->access_path = $process->getAccessUrl();
 		$this->containerName = $this->access_path;
-		if (preg_match('#/interactive-tool/([^/]+)/?#', $this->access_path, $matches)) {
+		if (strpos((string)$this->access_path, "/guacamole/") === false
+			&& preg_match('#/interactive-tool/([^/]+)/?#', (string)$this->access_path, $matches)) {
 			$this->containerName = $matches[1];
 		}
 		$this->interactive_tool = array(
