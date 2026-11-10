@@ -1503,6 +1503,9 @@ class Tooljob
 					$jobOptions["env"][$env_key] = (string)$env_value;
 				}
 			}
+			if (!empty($tool['infrastructure']['image_pull_secrets']) && is_array($tool['infrastructure']['image_pull_secrets'])) {
+				$jobOptions["image_pull_secrets"] = $tool['infrastructure']['image_pull_secrets'];
+			}
 		}
 
 		$pid = execJob($this->working_dir, $this->submission_file, $queue, $cpus, $memory,  $this->stdout_file, $this->stderr_file, $jobManager, $this->toolId, $jobOptions);

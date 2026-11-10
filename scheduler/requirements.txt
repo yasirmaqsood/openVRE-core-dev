@@ -1,0 +1,2 @@
+# Only dependency: reading the YAML workload templates (scheduler/templates/).
+PyYAML==6.0.2

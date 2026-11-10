@@ -1,0 +1,172 @@
+# Interactive web tool reached in the browser at /interactive-tool/<session>/
+# (RStudio, Jupyter, VS Code, Stata web, ...).
+#
+# Used for every interactive tool whose infrastructure.k8s.template is
+# "openvre-web-session", and for older tools without that field that are not
+# Guacamole desktops. A new web tool normally needs only a tool definition with
+# different parameters (image, port, env, ...), not a new template.
+#
+# Objects: ConfigMap (proxy headers) -> Deployment -> Service -> Ingress.
+#
+# {{ session.* }} values are computed by the scheduler (scheduler/README.md,
+# "Session building blocks"). The scheduler's session policy checks every object
+# after it is filled in and forces labels, the namespace and safe pod settings.
+#
+# Rules for editing: quote every placeholder ("{{ x }}"), quote values that must
+# stay text ("1", "0640", "true"). The scheduler refuses to start if this file is invalid.
+
+name: openvre-web-session
+version: "1"
+description: Browser-based tool behind /interactive-tool/<session>/ (Deployment, Service, Ingress).
+kind: InteractiveSession
+
+access:
+  type: web
+
+parameters:
+  image:
+    type: image
+    required: true
+    description: Tool container image. Checked against OPENVRE_IMAGE_ALLOWLIST.
+  port:
+    type: int
+    required: true
+    min: 1
+    max: 65535
+    description: Port the tool listens on inside the container.
+  cpu:
+    type: quantity
+    default: "500m"
+    max: "8"
+  memory:
+    type: quantity
+    default: "1536Mi"
+    max: "16Gi"
+  executable:
+    type: string
+    default: ""
+    max_length: 4096
+    description: Optional start command, run as "sh -lc <executable>". Empty keeps the image's own command.
+  readiness_path:
+    type: string
+    default: ""
+    pattern: "/.*"
+    description: HTTP path that answers when the tool is ready. Empty means a TCP check on the port.
+  env:
+    type: env
+    default: {}
+    description: Extra environment variables for the tool container.
+  image_pull_secrets:
+    type: pull_secrets
+    default: []
+    description: Extra registry secrets. Must be allowed on the scheduler.
+  proxy_root_mode:
+    type: string
+    default: ""
+    enum: ["", "none", "x_forwarded_prefix", "custom_header"]
+    description: How the tool learns its URL prefix. x_forwarded_prefix sends X-Forwarded-Prefix.
+  proxy_root_header:
+    type: string
+    default: ""
+    pattern: "[A-Za-z0-9-]{1,64}"
+    description: Header name used with proxy_root_mode custom_header (e.g. X-RStudio-Root-Path).
+  proxy_headers:
+    type: headers
+    default: {}
+    description: Extra request headers; {{PATH_PREFIX}} in a value becomes the session path.
+
+objects:
+  # Headers nginx adds to every request (X-Forwarded-Proto, prefix headers).
+  # Keep the name "<session>-proxy-hdr": the scheduler links the Ingress to it.
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: "{{ session.name }}-proxy-hdr"
+      labels: "{{ session.labels }}"
+    data: "{{ session.proxy_headers }}"
+
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: "{{ session.name }}"
+      labels: "{{ session.labels }}"
+      annotations: "{{ session.annotations }}"
+    spec:
+      replicas: 1
+      # One user session: never run two copies against the same workspace.
+      strategy:
+        type: Recreate
+      selector:
+        matchLabels:
+          app: "{{ session.name }}"
+      template:
+        metadata:
+          labels: "{{ session.pod_labels }}"
+        spec:
+          automountServiceAccountToken: false
+          enableServiceLinks: false
+          # Many tool images (e.g. RStudio's s6 init) start as root; fsGroup gives
+          # the shared volume the right group ownership.
+          securityContext:
+            fsGroup: "{{ config.run_as_gid }}"
+          nodeSelector: "{{ config.node_selector }}"
+          tolerations: "{{ config.tolerations }}"
+          affinity: "{{ config.affinity }}"
+          imagePullSecrets: "{{ session.pull_secrets }}"
+          containers:
+            - name: interactive
+              image: "{{ image }}"
+              command: "{{ session.command }}"
+              env: "{{ env }}"
+              ports:
+                - name: http
+                  containerPort: "{{ port }}"
+              resources:
+                requests:
+                  cpu: "{{ cpu }}"
+                  memory: "{{ memory }}"
+                limits:
+                  cpu: "{{ cpu }}"
+                  memory: "{{ memory }}"
+              volumeMounts: "{{ session.mounts }}"
+              readinessProbe: "{{ session.readiness_probe }}"
+            # The audit sidecar, when OPENVRE_INTERACTIVE_AUDIT_SIDECAR_ENABLED is on.
+            - "{{ ...session.audit_containers }}"
+          volumes:
+            - name: userdata
+              persistentVolumeClaim:
+                claimName: "{{ config.userdata_pvc }}"
+            - "{{ ...session.audit_volumes }}"
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: "{{ session.name }}"
+      labels: "{{ session.labels }}"
+    spec:
+      selector:
+        app: "{{ session.name }}"
+      ports:
+        - name: http
+          port: "{{ port }}"
+          targetPort: "{{ port }}"
+
+  - apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      name: "{{ session.name }}"
+      labels: "{{ session.labels }}"
+      annotations: "{{ session.ingress_annotations }}"
+    spec:
+      ingressClassName: "{{ config.ingress_class }}"
+      rules:
+        - host: "{{ session.ingress_host }}"
+          http:
+            paths:
+              - path: "{{ session.ingress_path }}"
+                pathType: ImplementationSpecific
+                backend:
+                  service:
+                    name: "{{ session.name }}"
+                    port:
+                      number: "{{ port }}"

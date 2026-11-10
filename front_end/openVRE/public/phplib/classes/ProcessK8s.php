@@ -9,22 +9,25 @@ use Monolog\Logger;
 
  *
  *
- * Environment variables consumed (required — set defaults in deployment env / .env):
- *   OPENVRE_K8S_NAMESPACE       — target namespace for Jobs
- *   OPENVRE_K8S_JOB_IMAGE       — fallback container image for the Job pod (may be empty if set per-tool)
- *   OPENVRE_K8S_SHARED_PVC      — PVC name for /shared_data volume
- *   OPENVRE_K8S_TOOLS_PVC       — PVC name for /var/www/html/openVRE/public/tools volume
- *   OPENVRE_K8S_SCHEDULER_URL   — base URL of the scheduler service
- *   OPENVRE_K8S_SCHEDULER_TOKEN — Bearer token for scheduler authentication (may be empty)
- *   OPENVRE_K8S_RUN_AS_UID      — UID the Job pod runs as
- *   OPENVRE_K8S_RUN_AS_GID      — GID / fsGroup for the Job pod
- *   OPENVRE_K8S_JOB_TTL         — seconds to keep a finished Job before auto-deletion
- *   OPENVRE_K8S_JOB_DEADLINE    — max seconds a Job is allowed to run before being killed
- *   OPENVRE_K8S_JOB_MEMORY_REQUEST — fallback memory request when tool has no infrastructure.memory (e.g. "1Gi")
- *   OPENVRE_K8S_JOB_MEMORY_LIMIT   — fallback memory limit when tool has no infrastructure.memory (e.g. "2Gi")
- *   OPENVRE_K8S_NODE_SELECTOR   — optional "key=value,key2=value2" (same as scheduler)
- *   OPENVRE_K8S_TOLERATIONS     — optional "key=value:Effect,..." (same as scheduler)
- *   OPENVRE_K8S_EVICTION_TOLERATION_SECONDS — not-ready/unreachable eviction grace (default 60)
+ * Batch Jobs are sent to the scheduler as the template "openvre-batch-job" plus
+ * parameters (see scheduler/templates/). The Job's user, volumes, node placement
+ * and security settings are set by the scheduler, not here.
+ *
+ * Environment variables consumed:
+ *   OPENVRE_K8S_NAMESPACE       — target namespace (required)
+ *   OPENVRE_K8S_JOB_IMAGE       — fallback tool image when the tool sets none (required, may be empty)
+ *   OPENVRE_K8S_SHARED_PVC      — PVC for /shared_data (required; also the session fallback PVC)
+ *   OPENVRE_K8S_SCHEDULER_URL   — base URL of the scheduler service (required)
+ *   OPENVRE_K8S_SCHEDULER_TOKEN — Bearer token for the scheduler (required)
+ *   OPENVRE_K8S_JOB_TTL         — seconds to keep a finished Job (default 120)
+ *   OPENVRE_K8S_JOB_DEADLINE    — max seconds a Job may run (default 86400)
+ *   OPENVRE_K8S_JOB_MEMORY_REQUEST / _LIMIT — memory when the tool sets none (else template default)
+ *
+ * Interactive sessions are sent as a session template ("openvre-web-session",
+ * "openvre-desktop-session" or the tool's infrastructure.k8s.template) plus the
+ * tool's parameters and OpenVRE's context. Volumes, user/group and node placement
+ * for both Jobs and sessions are set by the scheduler (OPENVRE_JOB_RUN_AS_UID/GID,
+ * DEFAULT_USERDATA_PVC, ...).
  */
 class ProcessK8s
 {
@@ -63,20 +66,11 @@ class ProcessK8s
     /** PVC name mounted at /shared_data (shared between frontend, sge, and jobs) */
     private string $sharedPvc;
 
-    /** PVC name mounted at the tools directory inside the Job pod */
-    private string $toolsPvc;
-
     /** Base URL of the scheduler HTTP service */
     private string $schedulerUrl;
 
     /** Bearer token sent to the scheduler for authentication */
     private string $schedulerToken;
-
-    /** UID the Job pod container runs as */
-    private int $runAsUid;
-
-    /** GID / fsGroup for the Job pod */
-    private int $runAsGid;
 
     /** Seconds to keep a finished Job before auto-deletion */
     private int $jobTtl;
@@ -84,23 +78,15 @@ class ProcessK8s
     /** Max seconds a Job is allowed to run before being killed */
     private int $jobDeadline;
 
-    /** Optional nodeSelector for batch Job pods (project-pinned clusters) */
-    private array $nodeSelector = [];
-
-    /** Tolerations for batch Job pods (project taints + eviction) */
-    private array $tolerations = [];
-
     /** Interactive session URL returned by the scheduler */
     private string $accessUrl = "";
 
-    /** PVC for interactive user data. Falls back to the shared PVC. */
-    private string $userdataPvc = "";
-
-    /** PVC for interactive audit data. Falls back to the shared PVC. */
-    private string $admindataPvc = "";
 
     /** Additional environment variables to inject into the Job pod (from tool Mongo definition) */
     private array $jobEnv = [];
+
+    /** Image pull secret names for the Job pod (from tool infrastructure.image_pull_secrets) */
+    private array $jobPullSecrets = [];
 
     /** Maps Kubernetes Job condition strings to OpenVRE internal state labels */
     private array $jobState = [
@@ -127,24 +113,10 @@ class ProcessK8s
         $this->namespace = $this->env("OPENVRE_K8S_NAMESPACE");
         $this->jobImage = $this->env("OPENVRE_K8S_JOB_IMAGE");
         $this->sharedPvc = $this->env("OPENVRE_K8S_SHARED_PVC");
-        $this->toolsPvc = $this->env("OPENVRE_K8S_TOOLS_PVC");
         $this->schedulerUrl = rtrim($this->env("OPENVRE_K8S_SCHEDULER_URL"), "/");
         $this->schedulerToken = $this->env("OPENVRE_K8S_SCHEDULER_TOKEN");
-        $this->runAsUid = (int)$this->env("OPENVRE_K8S_RUN_AS_UID");
-        $this->runAsGid = (int)$this->env("OPENVRE_K8S_RUN_AS_GID");
-        $this->jobTtl = (int)$this->env("OPENVRE_K8S_JOB_TTL");
-        $this->jobDeadline = (int)$this->env("OPENVRE_K8S_JOB_DEADLINE");
-        $this->nodeSelector = $this->parseNodeSelector($this->optionalEnv("OPENVRE_K8S_NODE_SELECTOR"));
-        $evictionSeconds = (int)$this->optionalEnv("OPENVRE_K8S_EVICTION_TOLERATION_SECONDS", "60");
-        if ($evictionSeconds <= 0) {
-            $evictionSeconds = 60;
-        }
-        $this->tolerations = array_merge(
-            $this->parseTolerations($this->optionalEnv("OPENVRE_K8S_TOLERATIONS")),
-            $this->evictionTolerations($evictionSeconds)
-        );
-        $this->userdataPvc = getenv("OPENVRE_K8S_USERDATA_PVC") ?: "";
-        $this->admindataPvc = getenv("OPENVRE_K8S_ADMINDATA_PVC") ?: "";
+        $this->jobTtl = (int)$this->optionalEnv("OPENVRE_K8S_JOB_TTL", "120");
+        $this->jobDeadline = (int)$this->optionalEnv("OPENVRE_K8S_JOB_DEADLINE", "86400");
 
         // Allow per-tool overrides:
         // container image and extra environment variables via $jobOptions.
@@ -153,6 +125,9 @@ class ProcessK8s
         }
         if (!empty($jobOptions["env"]) && is_array($jobOptions["env"])) {
             $this->jobEnv = $jobOptions["env"];
+        }
+        if (!empty($jobOptions["image_pull_secrets"]) && is_array($jobOptions["image_pull_secrets"])) {
+            $this->jobPullSecrets = array_values(array_filter(array_map("strval", $jobOptions["image_pull_secrets"])));
         }
 
         // If a submission script path was provided, immediately create and submit
@@ -208,7 +183,10 @@ class ProcessK8s
     }
 
 
-    /** Builds a Kubernetes Job manifest and submits it to the scheduler. */
+    /** Name of the scheduler template batch runs use (scheduler/templates/openvre-batch-job.yaml). */
+    public const BATCH_TEMPLATE = 'openvre-batch-job';
+
+    /** Submits the Job to the scheduler as a template name plus parameters. */
     private function runCom(int $cpu, int $mem): void
     {
         // Abort if no container image is configured — there's nothing to run.
@@ -228,14 +206,15 @@ class ProcessK8s
         $jobName = $this->sanitizeName($this->jobname);
         $this->pid = $jobName;
 
-        $yaml = $this->arrayToYaml($this->buildJobManifest($jobName, $cpu, $mem));
-
-        // Submit Job via the scheduler service.
-        $this->fullcommand = "POST " . $this->schedulerUrl . "/jobs";
+        // The scheduler builds the Job from its template. User, volumes, node
+        // placement and security settings come from the template and scheduler
+        // config; only these parameters come from here.
+        $this->fullcommand = "POST " . $this->schedulerUrl . "/v1/jobs (template " . self::BATCH_TEMPLATE . ")";
         $this->logger->info("K8s job submission via scheduler '" . $this->fullcommand . "'");
-        $response = $this->schedulerRequest("POST", "/jobs", array(
+        $response = $this->schedulerRequest("POST", "/v1/jobs", array(
             "namespace" => $this->namespace,
-            "manifest" => $yaml
+            "template" => self::BATCH_TEMPLATE,
+            "params" => $this->buildJobParams($jobName, $cpu, $mem),
         ));
 
         // Handle submission result.
@@ -254,170 +233,48 @@ class ProcessK8s
     }
 
 
-    private function buildJobManifest(string $jobName, int $cpu, int $mem): array
+    /**
+     * Parameters for the openvre-batch-job template. The scheduler checks each
+     * one against the type the template declares.
+     */
+    private function buildJobParams(string $jobName, int $cpu, int $mem): array
     {
-        $cpuRequest = $cpu > 0 ? (string)$cpu : "1";
-        $cpuLimit = $cpu > 0 ? (string)$cpu : "1";
-        $memLimit = $mem > 0 ? ($mem . "Gi") : $this->optionalEnv("OPENVRE_K8S_JOB_MEMORY_LIMIT");
-        $memRequest = $mem > 0 ? ($mem . "Gi") : $this->optionalEnv("OPENVRE_K8S_JOB_MEMORY_REQUEST");
-
-        $requests = array("cpu" => $cpuRequest);
-        $limits = array("cpu" => $cpuLimit);
-        if ($memRequest !== "") {
-            $requests["memory"] = $memRequest;
-        }
-        if ($memLimit !== "") {
-            $limits["memory"] = $memLimit;
-        }
-
-        $manifest = array(
-            "apiVersion" => "batch/v1",
-            "kind" => "Job",
-            "metadata" => array(
-                "name" => $jobName,
-                "namespace" => $this->namespace,
-                "labels" => array(
-                    "app.kubernetes.io/managed-by" => "openvre",
-                    "openvre-job-id" => $jobName
-                )
-            ),
-            "spec" => array(
-                "ttlSecondsAfterFinished" => $this->jobTtl,
-                "activeDeadlineSeconds" => $this->jobDeadline,
-                "backoffLimit" => 0,
-                "template" => array(
-                    "metadata" => array(
-                        "labels" => array(
-                            "app.kubernetes.io/managed-by" => "openvre",
-                            "openvre-job-id" => $jobName,
-                            "openvre.colocate" => "true",
-                            "openvre.io/batch" => "true",
-                        ),
-                    ),
-                    "spec" => array(
-                        "restartPolicy" => "Never",
-                        "containers" => array(
-                            array(
-                                "name" => "tool-runner",
-                                "image" => $this->jobImage,
-                                "command" => array("bash", "-lc", "cd \"\$OPENVRE_WORKDIR\" && bash \"\$OPENVRE_SUBMIT_SCRIPT\""),
-                                "env" => array(
-                                    array("name" => "OPENVRE_WORKDIR", "value" => $this->workDir),
-                                    array("name" => "OPENVRE_SUBMIT_SCRIPT", "value" => $this->command),
-                                ),
-                                "resources" => array(
-                                    "requests" => $requests,
-                                    "limits" => $limits,
-                                ),
-                                "securityContext" => array(
-                                    "allowPrivilegeEscalation" => false,
-                                ),
-                                "volumeMounts" => array(
-                                    array("name" => "shared-data", "mountPath" => $GLOBALS['shared']),
-                                )
-                            )
-                        ),
-                        "securityContext" => array(
-                            "runAsUser" => max(1, $this->runAsUid),
-                            "runAsGroup" => max(1, $this->runAsGid),
-                            "fsGroup" => max(1, $this->runAsGid)
-                        ),
-                        "volumes" => array(
-                            array("name" => "shared-data", "persistentVolumeClaim" => array("claimName" => $this->sharedPvc)),
-                            array("name" => "tools", "persistentVolumeClaim" => array("claimName" => $this->toolsPvc))
-                        )
-                    )
-                )
-            )
+        $params = array(
+            "job_name" => $jobName,
+            "image" => $this->jobImage,
+            "workdir" => $this->workDir,
+            "submit_script" => $this->command,
+            "cpu" => $cpu > 0 ? (string)$cpu : "1",
+            "deadline_seconds" => $this->jobDeadline > 0 ? $this->jobDeadline : 86400,
+            "ttl_seconds" => max(0, $this->jobTtl),
         );
 
-        if (!empty($this->jobEnv)) {
-            $envList =& $manifest["spec"]["template"]["spec"]["containers"][0]["env"];
-            foreach ($this->jobEnv as $envName => $envValue) {
-                if (empty($envName) || empty($envValue)) {
-                    continue;
-                }
-                $envList[] = array(
-                    "name" => (string)$envName,
-                    "value" => (string)$envValue
-                );
-            }
+        // Memory: the tool's own value, else the deployment default, else the template default.
+        $memRequest = $mem > 0 ? ($mem . "Gi") : $this->optionalEnv("OPENVRE_K8S_JOB_MEMORY_REQUEST");
+        $memLimit = $mem > 0 ? ($mem . "Gi") : $this->optionalEnv("OPENVRE_K8S_JOB_MEMORY_LIMIT");
+        if ($memRequest !== "") {
+            $params["memory_request"] = $memRequest;
+        }
+        if ($memLimit !== "") {
+            $params["memory_limit"] = $memLimit;
         }
 
-        $podSpec =& $manifest["spec"]["template"]["spec"];
-        if (!empty($this->nodeSelector)) {
-            $podSpec["nodeSelector"] = $this->nodeSelector;
-        }
-        if (!empty($this->tolerations)) {
-            $podSpec["tolerations"] = $this->tolerations;
-        }
-
-        return $manifest;
-    }
-
-    private function parseNodeSelector(string $raw): array
-    {
-        $selector = [];
-        foreach (explode(",", $raw) as $part) {
-            $part = trim($part);
-            if ($part === "" || !str_contains($part, "=")) {
+        // Tool variables (infrastructure.container_env). Sent only when there are
+        // some: an empty PHP array would encode as a JSON list, not a mapping.
+        $env = array();
+        foreach ($this->jobEnv as $envName => $envValue) {
+            if ((string)$envName === "" || $envValue === null || $envValue === "") {
                 continue;
             }
-            [$key, $value] = array_map("trim", explode("=", $part, 2));
-            if ($key !== "" && $value !== "") {
-                $selector[$key] = $value;
-            }
+            $env[(string)$envName] = (string)$envValue;
         }
-
-        return $selector;
-    }
-
-    private function parseTolerations(string $raw): array
-    {
-        $tolerations = [];
-        foreach (explode(",", $raw) as $part) {
-            $part = trim($part);
-            if ($part === "") {
-                continue;
-            }
-            if (str_contains($part, "=")) {
-                [$kv, $effect] = array_pad(explode(":", $part, 2), 2, "NoSchedule");
-                [$key, $value] = array_map("trim", explode("=", $kv, 2));
-                $tolerations[] = [
-                    "key" => $key,
-                    "operator" => "Equal",
-                    "value" => $value,
-                    "effect" => $effect !== "" ? $effect : "NoSchedule",
-                ];
-            } else {
-                [$key, $effect] = array_pad(explode(":", $part, 2), 2, "NoSchedule");
-                $tolerations[] = [
-                    "key" => trim($key),
-                    "operator" => "Exists",
-                    "effect" => $effect !== "" ? $effect : "NoSchedule",
-                ];
-            }
+        if (!empty($env)) {
+            $params["env"] = $env;
         }
-
-        return $tolerations;
-    }
-
-    private function evictionTolerations(int $seconds): array
-    {
-        return [
-            [
-                "key" => "node.kubernetes.io/not-ready",
-                "operator" => "Exists",
-                "effect" => "NoExecute",
-                "tolerationSeconds" => $seconds,
-            ],
-            [
-                "key" => "node.kubernetes.io/unreachable",
-                "operator" => "Exists",
-                "effect" => "NoExecute",
-                "tolerationSeconds" => $seconds,
-            ],
-        ];
+        if (!empty($this->jobPullSecrets)) {
+            $params["image_pull_secrets"] = $this->jobPullSecrets;
+        }
+        return $params;
     }
 
 
@@ -473,96 +330,66 @@ class ProcessK8s
         return array("ok" => true, "data" => $json);
     }
 
-    /** Serializes the Job manifest array to YAML before sending it to the scheduler. */
-    private function arrayToYaml(array $data, int $indent = 0): string
-    {
-        $yaml = "";
-        $spaces = str_repeat("  ", $indent);
-        $isAssoc = function ($arr) {
-            if (!is_array($arr)) return false;
-            return array_keys($arr) !== range(0, count($arr) - 1);
-        };
-
-        foreach ($data as $key => $value) {
-            if (is_array($value)) {
-                if ($isAssoc($value)) {
-                    // Associative array → nested YAML object.
-                    $yaml .= $spaces . $key . ":\n" . $this->arrayToYaml($value, $indent + 1);
-                } else {
-                    // Sequential array → YAML list with "- " prefix.
-                    $yaml .= $spaces . $key . ":\n";
-                    foreach ($value as $item) {
-                        if (is_array($item)) {
-                            $yaml .= $spaces . "  -\n" . $this->arrayToYaml($item, $indent + 2);
-                        } else {
-                            $yaml .= $spaces . "  - " . $this->yamlScalar($item) . "\n";
-                        }
-                    }
-                }
-            } else {
-                $yaml .= $spaces . $key . ": " . $this->yamlScalar($value) . "\n";
-            }
-        }
-        return $yaml;
-    }
-
-
-    private function yamlScalar(mixed $value): string
-    {
-        if (is_bool($value)) return $value ? "true" : "false";
-        if (is_numeric($value)) return (string)$value;
-        $escaped = str_replace('"', '\"', (string)$value);
-        return '"' . $escaped . '"';
-    }
-
-
+    /**
+     * Status of a batch Job. An empty array means "finished": OpenVRE then
+     * collects outputs and stops polling. So an empty array is returned only
+     * when the scheduler says the Job is gone or done. If the scheduler cannot
+     * be reached, the Job is reported as still pending, so a scheduler restart
+     * does not finalize running jobs with partial outputs.
+     */
     public function getRunningJobInfo(string $pid): array
     {
         if ($this->isInteractivePid($pid)) {
             return $this->interactiveRunningInfo($pid);
         }
-        $job = array();
-        if (!$pid) return $job;
+        if (!$pid) return array();
 
-        // Query job status via the scheduler.
         $response = $this->schedulerRequest("GET", "/jobs/" . rawurlencode($pid) . "?namespace=" . rawurlencode($this->namespace));
 
         if ($response["ok"] !== true) {
+            $this->logger->warning("K8s job $pid: status unknown, scheduler error: " . $response["error"]);
+            return $this->unknownStateInfo($pid);
+        }
+        if (empty($response["data"]["exists"])) {
             return array();
         }
 
-        $exists = isset($response["data"]["exists"]) ? (bool)$response["data"]["exists"] : false;
-        if (!$exists) {
-            return array();
-        }
-
-        // Parse the Job JSON to determine its current condition.
-        $jsonRaw = isset($response["data"]["job"]) ? $response["data"]["job"] : "";
-        $json = json_decode($jsonRaw, true);
-        if (!is_array($json)) {
-            return array();
-        }
-
-        $status = $json['status'] ?? array();
-        $state = "Pending";
-        if (!empty($status['active'])) {
-            $state = "Running";
-        } elseif (!empty($status['succeeded'])) {
-            $state = "Succeeded";
-        } elseif (!empty($status['failed'])) {
-            $state = "Failed";
-        }
-
-        // Once the Job is finished (succeeded or failed), return empty so
-        // OpenVRE's workspace loop finalizes outputs and stops polling.
+        $state = $response["data"]["status"]["state"] ?? $this->stateFromRawJob($response["data"]["job"] ?? "");
         if ($state === "Succeeded" || $state === "Failed") {
+            if ($state === "Failed") {
+                $reason = $response["data"]["status"]["reason"] ?? "";
+                $this->logger->warning("K8s job $pid failed" . ($reason !== "" ? ": $reason" : ""));
+            }
             return array();
         }
 
-        $job['pid'] = $pid;
-        $job['state'] = $this->jobState[$state];
-        $job['job_name'] = $pid;
-        return $job;
+        return array(
+            "pid" => $pid,
+            "state" => $this->jobState[$state] ?? "PENDING",
+            "job_name" => $pid,
+        );
+    }
+
+    /** For schedulers older than v2, which return only the raw Job. */
+    private function stateFromRawJob($jsonRaw): string
+    {
+        $json = is_string($jsonRaw) ? json_decode($jsonRaw, true) : null;
+        $status = (is_array($json) && isset($json["status"]) && is_array($json["status"])) ? $json["status"] : array();
+        if (!empty($status["active"])) return "Running";
+        if (!empty($status["succeeded"])) return "Succeeded";
+        if (!empty($status["failed"])) return "Failed";
+        return "Pending";
+    }
+
+    /** Keeps monitoring a job or session while its real state cannot be read. */
+    private function unknownStateInfo(string $pid): array
+    {
+        return array(
+            "pid" => $pid,
+            "state" => "PENDING",
+            "job_name" => $pid,
+            "scheduler_unreachable" => true,
+        );
     }
 
 
@@ -586,6 +413,11 @@ class ProcessK8s
     }
 
 
+    /**
+     * Whether the submission worked. Called by execJob() right after submitting.
+     * A Job that already finished was still submitted, so that counts as true;
+     * so does a scheduler that accepted the Job but cannot answer the follow-up check.
+     */
     public function status()
     {
         if (!$this->pid) return false;
@@ -593,27 +425,10 @@ class ProcessK8s
         $response = $this->schedulerRequest("GET", "/jobs/" . rawurlencode($this->pid) . "?namespace=" . rawurlencode($this->namespace));
 
         if ($response["ok"] !== true) {
-            return false;
-        }
-
-        $exists = isset($response["data"]["exists"]) ? (bool)$response["data"]["exists"] : false;
-        if (!$exists) {
-            return false;
-        }
-
-        $jsonRaw = isset($response["data"]["job"]) ? $response["data"]["job"] : "";
-        $json = json_decode($jsonRaw, true);
-        if (!is_array($json)) {
+            $this->logger->warning("K8s job {$this->pid}: submitted, but status check failed: " . $response["error"]);
             return true;
         }
-
-        $status = isset($json["status"]) && is_array($json["status"]) ? $json["status"] : array();
-        // Job is no longer active if it has succeeded or failed.
-        if (!empty($status["succeeded"]) || !empty($status["failed"])) {
-            return false;
-        }
-
-        return true;
+        return !empty($response["data"]["exists"]);
     }
 
 
@@ -753,6 +568,23 @@ class ProcessK8s
         return "";
     }
 
+    /** Session templates on the scheduler (scheduler/templates/). */
+    public const WEB_SESSION_TEMPLATE = 'openvre-web-session';
+    public const DESKTOP_SESSION_TEMPLATE = 'openvre-desktop-session';
+
+    /**
+     * Starts an interactive session from a scheduler template.
+     *
+     * Template and parameters come from the tool definition:
+     *   infrastructure.k8s.template  e.g. "openvre-web-session", "openvre-desktop-session"
+     *   infrastructure.k8s.params    passed to the scheduler as they are (image, port, env, ...)
+     * Tools without infrastructure.k8s use their older fields (container_image,
+     * container_port, interactive_access, proxy, ...), mapped by legacySessionRequest().
+     *
+     * This method adds the context only OpenVRE knows: user, tool, project, run
+     * folder and workspace mounts. Nothing tool-specific is decided here, so a new
+     * tool needs a tool definition, not a code change.
+     */
     public function createSession($tool, $userId, $sessionId = "", array $sessionContext = array())
     {
         if ($this->schedulerUrl === "") {
@@ -763,16 +595,6 @@ class ProcessK8s
             $this->stderr = "OPENVRE_K8S_NAMESPACE is not set";
             return false;
         }
-        if ($this->sharedPvc === "" && $this->userdataPvc === "") {
-            $this->stderr = "OPENVRE_K8S_SHARED_PVC or OPENVRE_K8S_USERDATA_PVC is not set";
-            return false;
-        }
-        if ($this->userdataPvc === "") {
-            $this->userdataPvc = $this->sharedPvc;
-        }
-        if ($this->admindataPvc === "") {
-            $this->admindataPvc = $this->sharedPvc !== "" ? $this->sharedPvc : $this->userdataPvc;
-        }
         if ($userId === "") {
             $this->stderr = "user id is required";
             return false;
@@ -782,40 +604,24 @@ class ProcessK8s
             ? $tool['infrastructure']
             : array();
 
-        $image = $infra['container_image'] ?? (getenv("OPENVRE_INTERACTIVE_DEFAULT_IMAGE") ?: "");
-        if ($image === "") {
-            $this->stderr = "Missing infrastructure.container_image for interactive tool";
-            return false;
-        }
-
-        $memoryGb = (int)($infra['memory'] ?? 2);
-        $cpus = (int)($infra['cpus'] ?? 1);
-        $memory = max(1, $memoryGb) . "Gi";
-        $cpu = $cpus >= 2 ? (string)$cpus : (max(1, $cpus) * 500 . "m");
-
-        $interactiveAccess = (isset($infra['interactive_access']) && is_array($infra['interactive_access']))
-            ? $infra['interactive_access']
-            : array();
-        $guacamoleMode = strtolower(trim((string)($interactiveAccess['mode'] ?? ''))) === 'guacamole';
-
-        $containerPort = isset($infra['container_port']) ? (int)$infra['container_port'] : 0;
-        if ($guacamoleMode) {
-            $containerPort = (int)($interactiveAccess['port'] ?? 0);
-            if ($containerPort <= 0) {
-                $this->stderr = "Guacamole interactive tool is missing interactive_access.port";
+        // Template + parameters.
+        $k8s = (isset($infra['k8s']) && is_array($infra['k8s'])) ? $infra['k8s'] : array();
+        if (!empty($k8s['template'])) {
+            $template = (string)$k8s['template'];
+            $params = (isset($k8s['params']) && is_array($k8s['params'])) ? $k8s['params'] : array();
+        } else {
+            [$template, $params, $err] = $this->legacySessionRequest($infra);
+            if ($err !== "") {
+                $this->stderr = $err;
                 return false;
             }
-        } elseif ($containerPort <= 0) {
-            $containerPort = (int)(getenv("OPENVRE_INTERACTIVE_DEFAULT_PORT") ?: 0);
-        }
-        if ($containerPort <= 0) {
-            $this->stderr = "Missing infrastructure.container_port (and OPENVRE_INTERACTIVE_DEFAULT_PORT unset)";
-            return false;
         }
 
-        $executable = isset($infra['executable']) ? trim((string)$infra['executable']) : "";
-        $proxy = (isset($infra['proxy']) && is_array($infra['proxy'])) ? $infra['proxy'] : array();
+        // An empty PHP array is encoded as a JSON list, which breaks mapping
+        // parameters such as env: {}. Leave empty values out; the template default applies.
+        $params = array_filter($params, fn($val) => !(is_array($val) && empty($val)));
 
+        // Context: who and where. Same for every template.
         $workspaceMountPath = $this->resolveWorkspaceMountPath($infra);
         if ($workspaceMountPath === "") {
             $workspaceMountPath = trim((string)(getenv("OPENVRE_INTERACTIVE_DEFAULT_MOUNT") ?: ""));
@@ -849,13 +655,6 @@ class ProcessK8s
             return false;
         }
 
-        $runAsUid = getenv("OPENVRE_K8S_RUN_AS_UID");
-        $runAsGid = getenv("OPENVRE_K8S_RUN_AS_GID");
-        if ($runAsUid === false || $runAsUid === "" || $runAsGid === false || $runAsGid === "") {
-            $this->stderr = "OPENVRE_K8S_RUN_AS_UID and OPENVRE_K8S_RUN_AS_GID must be set";
-            return false;
-        }
-
         $externalBase = "";
         if (!empty($_SERVER["HTTP_HOST"])) {
             $scheme = (!empty($_SERVER["HTTPS"]) && $_SERVER["HTTPS"] !== "off") ? "https" : "http";
@@ -873,37 +672,24 @@ class ProcessK8s
 
         $payload = array(
             "namespace" => $this->namespace,
-            "user_id" => $userId,
-            "session_id" => $resolvedSessionId,
-            "tool_id" => $toolId,
-            "tool_name" => $toolName,
-            "image" => $image,
-            "userdata_pvc" => $this->userdataPvc,
-            "admindata_pvc" => $this->admindataPvc,
-            "cpu" => $cpu,
-            "memory" => $memory,
-            "run_as_uid" => (int)$runAsUid,
-            "run_as_gid" => (int)$runAsGid,
-            "external_base" => $externalBase,
-            "container_port" => $containerPort,
-            "workspace_mount_path" => $workspaceMountPath,
-            "working_dir" => $workingDir,
-            "project" => $project,
-            "execution" => $execution,
-            "volume_mounts" => $volumeMounts,
+            "template" => $template,
+            "context" => array(
+                "user_id" => (string)$userId,
+                "tool_id" => (string)$toolId,
+                "tool_name" => (string)$toolName,
+                "session_id" => $resolvedSessionId,
+                "project" => $project,
+                "execution" => $execution,
+                "working_dir" => $workingDir,
+                "workspace_mount_path" => $workspaceMountPath,
+                "volume_mounts" => $volumeMounts,
+                "external_base" => $externalBase,
+            ),
+            // (object) keeps an empty parameter list a JSON object, not a list.
+            "params" => (object)$params,
         );
 
-        if ($executable !== "") {
-            $payload["executable"] = $executable;
-        }
-        if (!empty($proxy)) {
-            $payload["proxy"] = $proxy;
-        }
-        if (!empty($interactiveAccess)) {
-            $payload["interactive_access"] = $interactiveAccess;
-        }
-
-        $response = $this->schedulerRequest("POST", "/interactive-sessions", $payload);
+        $response = $this->schedulerRequest("POST", "/v1/interactive-sessions", $payload);
         if ($response["ok"] !== true) {
             $this->stderr = $response["error"];
             return false;
@@ -911,24 +697,95 @@ class ProcessK8s
 
         $data = $response["data"];
         $this->pid = isset($data["name"]) ? (string)$data["name"] : "";
-        $this->accessUrl = isset($data["access_url"]) ? (string)$data["access_url"] : "";
         if ($this->pid === "") {
             $this->stderr = "scheduler returned empty session name";
             return false;
         }
-        if ($guacamoleMode) {
-            $protocol = strtolower(trim((string)($interactiveAccess['protocol'] ?? 'vnc')));
-            if ($protocol === "") {
-                $protocol = "vnc";
-            }
-            $link = $this->createGuacamoleLink($this->pid, $containerPort, $protocol);
+
+        // How users reach the session is declared by the template.
+        $access = (isset($data["access"]) && is_array($data["access"])) ? $data["access"] : array();
+        $accessType = (string)($access["type"] ?? "web");
+        if ($accessType === "guacamole") {
+            $protocol = strtolower(trim((string)($access["protocol"] ?? "vnc"))) ?: "vnc";
+            $link = $this->createGuacamoleLink((string)($access["host"] ?? $this->pid), (int)($access["port"] ?? 0), $protocol);
             if ($link === "") {
                 $this->stopInteractive($this->pid);
                 return false;
             }
             $this->accessUrl = $link;
+        } else {
+            $this->accessUrl = (string)($access["url"] ?? ($data["access_url"] ?? ""));
         }
         return true;
+    }
+
+    /**
+     * Template and parameters for tools registered before infrastructure.k8s existed.
+     * Returns [template, params, error].
+     */
+    private function legacySessionRequest(array $infra): array
+    {
+        $interactiveAccess = (isset($infra['interactive_access']) && is_array($infra['interactive_access']))
+            ? $infra['interactive_access']
+            : array();
+        $desktop = strtolower(trim((string)($interactiveAccess['mode'] ?? ''))) === 'guacamole';
+
+        $image = (string)($infra['container_image'] ?? (getenv("OPENVRE_INTERACTIVE_DEFAULT_IMAGE") ?: ""));
+        if ($image === "") {
+            return array("", array(), "Missing infrastructure.container_image for interactive tool");
+        }
+
+        if ($desktop) {
+            $port = (int)($interactiveAccess['port'] ?? 0);
+            if ($port <= 0) {
+                return array("", array(), "Guacamole interactive tool is missing interactive_access.port");
+            }
+        } else {
+            $port = isset($infra['container_port']) ? (int)$infra['container_port'] : 0;
+            if ($port <= 0) {
+                $port = (int)(getenv("OPENVRE_INTERACTIVE_DEFAULT_PORT") ?: 0);
+            }
+            if ($port <= 0) {
+                return array("", array(), "Missing infrastructure.container_port (and OPENVRE_INTERACTIVE_DEFAULT_PORT unset)");
+            }
+        }
+
+        $memoryGb = (int)($infra['memory'] ?? 2);
+        $cpus = (int)($infra['cpus'] ?? 1);
+        $params = array(
+            "image" => $image,
+            "port" => $port,
+            "cpu" => $cpus >= 2 ? (string)$cpus : (max(1, $cpus) * 500 . "m"),
+            "memory" => max(1, $memoryGb) . "Gi",
+        );
+        $executable = isset($infra['executable']) ? trim((string)$infra['executable']) : "";
+        if ($executable !== "") {
+            $params["executable"] = $executable;
+        }
+        if (!empty($infra['readiness_path'])) {
+            $params["readiness_path"] = (string)$infra['readiness_path'];
+        }
+        if (!empty($infra['image_pull_secrets']) && is_array($infra['image_pull_secrets'])) {
+            $params["image_pull_secrets"] = array_values(array_map("strval", $infra['image_pull_secrets']));
+        }
+
+        if ($desktop) {
+            $protocol = strtolower(trim((string)($interactiveAccess['protocol'] ?? 'vnc')));
+            $params["protocol"] = $protocol !== "" ? $protocol : "vnc";
+            return array(self::DESKTOP_SESSION_TEMPLATE, $params, "");
+        }
+
+        $proxy = (isset($infra['proxy']) && is_array($infra['proxy'])) ? $infra['proxy'] : array();
+        if (!empty($proxy['root_path_mode'])) {
+            $params["proxy_root_mode"] = strtolower(trim((string)$proxy['root_path_mode']));
+        }
+        if (!empty($proxy['root_path_header'])) {
+            $params["proxy_root_header"] = trim((string)$proxy['root_path_header']);
+        }
+        if (!empty($proxy['extra_headers']) && is_array($proxy['extra_headers'])) {
+            $params["proxy_headers"] = array_map("strval", $proxy['extra_headers']);
+        }
+        return array(self::WEB_SESSION_TEMPLATE, $params, "");
     }
 
     public function getAccessUrl()
@@ -946,16 +803,27 @@ class ProcessK8s
             "GET",
             "/interactive-sessions/" . rawurlencode($pid) . "?namespace=" . rawurlencode($this->namespace)
         );
-        if ($response["ok"] !== true || empty($response["data"]["exists"])) {
+        if ($response["ok"] !== true) {
+            // Do not drop the session from the user's list (its pods keep running)
+            // just because the scheduler could not answer this time.
+            $this->logger->warning("K8s session $pid: status unknown, scheduler error: " . $response["error"]);
+            return $this->unknownStateInfo($pid);
+        }
+        if (empty($response["data"]["exists"])) {
             return array();
         }
 
         $state = $response["data"]["state"] ?? "Pending";
-        return array(
+        $info = array(
             "pid" => $pid,
-            "state" => ($state === "Running") ? "RUNNING" : "PENDING",
+            // Failed = image pull or crash loop: show ERROR instead of waiting forever.
+            "state" => $state === "Running" ? "RUNNING" : ($state === "Failed" ? "ERROR" : "PENDING"),
             "job_name" => $pid,
         );
+        if (!empty($response["data"]["reason"])) {
+            $info["reason"] = (string)$response["data"]["reason"];
+        }
+        return $info;
     }
 
     private function stopInteractive($pid)

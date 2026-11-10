@@ -1,0 +1,127 @@
+# Desktop tool reached through Guacamole (VNC or RDP), e.g. a Linux desktop
+# with Stata or another GUI application.
+#
+# Used for every interactive tool whose infrastructure.k8s.template is
+# "openvre-desktop-session", and for older tools with
+# infrastructure.interactive_access.mode = "guacamole".
+#
+# Objects: Deployment -> Service. No Ingress: users connect through Guacamole,
+# and guacd reaches the Service inside the cluster. The scheduler returns
+# access {type: guacamole, host, port, protocol}; the frontend creates the
+# Guacamole connection from it.
+#
+# {{ session.* }} values are computed by the scheduler (scheduler/README.md,
+# "Session building blocks"). The scheduler's session policy checks every object
+# after it is filled in.
+
+name: openvre-desktop-session
+version: "1"
+description: Desktop tool reached through Guacamole over VNC or RDP (Deployment, Service).
+kind: InteractiveSession
+
+access:
+  type: guacamole
+  protocol: "{{ protocol }}"
+
+parameters:
+  image:
+    type: image
+    required: true
+    description: Desktop container image. Checked against OPENVRE_IMAGE_ALLOWLIST.
+  port:
+    type: int
+    required: true
+    min: 1
+    max: 65535
+    description: VNC or RDP port inside the container (e.g. 5901, 3389).
+  protocol:
+    type: string
+    default: "vnc"
+    enum: ["vnc", "rdp"]
+  cpu:
+    type: quantity
+    default: "1"
+    max: "8"
+  memory:
+    type: quantity
+    default: "2Gi"
+    max: "16Gi"
+  executable:
+    type: string
+    default: ""
+    max_length: 4096
+    description: Optional start command, run as "sh -lc <executable>". Empty keeps the image's own command.
+  readiness_path:
+    type: string
+    default: ""
+    pattern: "/.*"
+    description: Usually empty for desktops (TCP check on the VNC/RDP port).
+  env:
+    type: env
+    default: {}
+  image_pull_secrets:
+    type: pull_secrets
+    default: []
+
+objects:
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: "{{ session.name }}"
+      labels: "{{ session.labels }}"
+      annotations: "{{ session.annotations }}"
+    spec:
+      replicas: 1
+      strategy:
+        type: Recreate
+      selector:
+        matchLabels:
+          app: "{{ session.name }}"
+      template:
+        metadata:
+          labels: "{{ session.pod_labels }}"
+        spec:
+          automountServiceAccountToken: false
+          enableServiceLinks: false
+          securityContext:
+            fsGroup: "{{ config.run_as_gid }}"
+          nodeSelector: "{{ config.node_selector }}"
+          tolerations: "{{ config.tolerations }}"
+          affinity: "{{ config.affinity }}"
+          imagePullSecrets: "{{ session.pull_secrets }}"
+          containers:
+            - name: interactive
+              image: "{{ image }}"
+              command: "{{ session.command }}"
+              env: "{{ env }}"
+              ports:
+                - name: desktop
+                  containerPort: "{{ port }}"
+              resources:
+                requests:
+                  cpu: "{{ cpu }}"
+                  memory: "{{ memory }}"
+                limits:
+                  cpu: "{{ cpu }}"
+                  memory: "{{ memory }}"
+              volumeMounts: "{{ session.mounts }}"
+              readinessProbe: "{{ session.readiness_probe }}"
+            - "{{ ...session.audit_containers }}"
+          volumes:
+            - name: userdata
+              persistentVolumeClaim:
+                claimName: "{{ config.userdata_pvc }}"
+            - "{{ ...session.audit_volumes }}"
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: "{{ session.name }}"
+      labels: "{{ session.labels }}"
+    spec:
+      selector:
+        app: "{{ session.name }}"
+      ports:
+        - name: desktop
+          port: "{{ port }}"
+          targetPort: "{{ port }}"
