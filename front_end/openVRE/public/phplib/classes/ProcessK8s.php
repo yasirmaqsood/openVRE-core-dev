@@ -18,7 +18,9 @@ use Monolog\Logger;
  *   OPENVRE_K8S_JOB_IMAGE       — fallback tool image when the tool sets none (required, may be empty)
  *   OPENVRE_K8S_SHARED_PVC      — PVC for /shared_data (required; also the session fallback PVC)
  *   OPENVRE_K8S_SCHEDULER_URL   — base URL of the scheduler service (required)
- *   OPENVRE_K8S_SCHEDULER_TOKEN — Bearer token for the scheduler (required)
+ *   OPENVRE_K8S_SCHEDULER_TOKEN — shared token for the scheduler (required)
+ * Every request also carries the user's Keycloak token (X-OpenVRE-User-Token),
+ * refreshed when needed, so the scheduler can check who owns a session or Job.
  *   OPENVRE_K8S_JOB_TTL         — seconds to keep a finished Job (default 120)
  *   OPENVRE_K8S_JOB_DEADLINE    — max seconds a Job may run (default 86400)
  *   OPENVRE_K8S_JOB_MEMORY_REQUEST / _LIMIT — memory when the tool sets none (else template default)
@@ -278,6 +280,37 @@ class ProcessK8s
     }
 
 
+    /**
+     * The logged-in user's Keycloak access token, refreshed with the refresh
+     * token when it has expired or expires within 30 seconds. Empty when there
+     * is no logged-in user or the session can no longer be refreshed.
+     */
+    private function userAccessToken(): string
+    {
+        $token = $_SESSION['userToken'] ?? null;
+        if (!is_object($token) || !method_exists($token, 'getToken')) {
+            return "";
+        }
+        $expires = method_exists($token, 'getExpires') ? (int)$token->getExpires() : 0;
+        if ($expires > 0 && $expires - 30 < time()) {
+            $refresh = method_exists($token, 'getRefreshToken') ? $token->getRefreshToken() : null;
+            if (!$refresh) {
+                $this->logger->warning("User token expired and no refresh token in session");
+                return "";
+            }
+            try {
+                $provider = new Oauth2Provider([]);
+                $token = $provider->getAccessToken('refresh_token', ['refresh_token' => $refresh]);
+                $_SESSION['userToken'] = $token;
+            } catch (\Throwable $e) {
+                $this->logger->warning("Could not refresh the user token: " . $e->getMessage());
+                return "";
+            }
+        }
+        return preg_replace('/[\r\n]/', '', (string)$token->getToken());
+    }
+
+
     private function schedulerRequest(string $method, string $path, ?array $payload = null): array
     {
         if ($this->schedulerUrl === "") {
@@ -291,9 +324,15 @@ class ProcessK8s
         $ch = curl_init($url);
         $headers = array("Content-Type: application/json");
 
-        // Authenticate to the scheduler with a Bearer token.
+        // Who is calling: the shared scheduler token.
         if ($this->schedulerToken !== "") {
             $headers[] = "Authorization: Bearer " . $this->schedulerToken;
+        }
+        // On whose behalf: the logged-in user's Keycloak access token. The
+        // scheduler takes the user from this token and checks ownership.
+        $userToken = $this->userAccessToken();
+        if ($userToken !== "") {
+            $headers[] = "X-OpenVRE-User-Token: " . $userToken;
         }
 
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
@@ -948,7 +987,8 @@ class ProcessK8s
                 return "";
             }
             $entityId = $this->guacamoleEntityId($db, $username);
-            $hostname = $k8sName . "." . $this->namespace . ".svc.cluster.local";
+            // Service DNS name without the cluster domain (not always cluster.local).
+            $hostname = $k8sName . "." . $this->namespace . ".svc";
             $db->beginTransaction();
             $stmt = $db->prepare(
                 "INSERT INTO guacamole_connection (connection_name, protocol) VALUES (?, ?)"

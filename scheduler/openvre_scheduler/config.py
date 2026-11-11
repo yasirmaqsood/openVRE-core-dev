@@ -47,6 +47,12 @@ class Settings:
     listen_host: str = "0.0.0.0"
     listen_port: int = 8080
     auth_tokens: list = field(default_factory=list)
+    # User check: "off", "optional" (verify when sent) or "required".
+    user_token: str = "off"
+    oidc_issuer: str = ""
+    oidc_jwks_url: str = ""
+    oidc_client_id: str = ""
+    oidc_admin_roles: list = field(default_factory=list)
     max_body_bytes: int = 1024 * 1024
     request_timeout_sec: int = 30
 
@@ -131,6 +137,11 @@ def load(env=None):
     # Several comma-separated tokens are accepted so a token can be rotated
     # without downtime: add the new one, roll the frontend, remove the old one.
     s.auth_tokens = _list(env, "SCHEDULER_AUTH_TOKEN")
+    s.user_token = (_str(env, "OPENVRE_USER_TOKEN", "off") or "off").lower()
+    s.oidc_issuer = _str(env, "OPENVRE_OIDC_ISSUER").rstrip("/")
+    s.oidc_jwks_url = _str(env, "OPENVRE_OIDC_JWKS_URL") or (s.oidc_issuer + "/protocol/openid-connect/certs" if s.oidc_issuer else "")
+    s.oidc_client_id = _str(env, "OPENVRE_OIDC_CLIENT_ID")
+    s.oidc_admin_roles = _list(env, "OPENVRE_OIDC_ADMIN_ROLES")
     s.max_body_bytes = _int(env, "SCHEDULER_MAX_BODY_BYTES", s.max_body_bytes)
     s.request_timeout_sec = _int(env, "SCHEDULER_REQUEST_TIMEOUT_SEC", s.request_timeout_sec)
 
@@ -209,6 +220,10 @@ def check(s):
     problems = []
     if not s.auth_tokens:
         problems.append("SCHEDULER_AUTH_TOKEN is empty; every request would be rejected")
+    if s.user_token not in ("off", "optional", "required"):
+        problems.append("OPENVRE_USER_TOKEN must be off, optional or required")
+    if s.user_token != "off" and not s.oidc_issuer:
+        problems.append("OPENVRE_OIDC_ISSUER is required when OPENVRE_USER_TOKEN is not off")
     for t in s.auth_tokens:
         if len(t) < 16:
             problems.append("SCHEDULER_AUTH_TOKEN values must be at least 16 characters")

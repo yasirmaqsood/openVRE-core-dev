@@ -9,7 +9,7 @@ The scheduler holds the Kubernetes credentials, so the frontend never needs any.
 
 **Everything is launched from YAML templates** (`templates/`): batch Jobs and interactive sessions. The caller sends a template name and parameters, never a Kubernetes manifest. A new tool is a tool definition in OpenVRE, not a code change. See [Templates](#templates) and [Adding a new tool](#adding-a-new-tool).
 
-Python 3.11, standard library plus one dependency: PyYAML, to read the templates.
+Python 3.11, standard library plus PyYAML (templates) and PyJWT with cryptography (user token signatures).
 
 ```
 browser → frontend (PHP, ProcessK8s.php) ──HTTP + JSON, Bearer token──▶ scheduler :8080 ──▶ Kubernetes API
@@ -34,6 +34,26 @@ browser → frontend (PHP, ProcessK8s.php) ──HTTP + JSON, Bearer token──
 | `openvre_scheduler/k8s.py` | Minimal Kubernetes API client |
 | `audit-sidecar/` | Separate image: the audit sidecar that runs inside session pods |
 | `tests/` | Unit and HTTP tests (`make test`) |
+
+## Authentication
+
+Every request (except `/healthz` and `/readyz`) passes two independent checks.
+
+**1. Which service is calling:** the shared bearer token `SCHEDULER_AUTH_TOKEN`, compared in constant time. Several comma-separated tokens can be valid at once, for rotation. With user tokens required (below), this token on its own cannot read or change any session or Job.
+
+**2. On whose behalf** (`OPENVRE_USER_TOKEN`: `off`, `optional`, `required`):
+
+The frontend sends the logged-in user's Keycloak access token in `X-OpenVRE-User-Token`, refreshing it when it expires. The scheduler checks signature, issuer (`OPENVRE_OIDC_ISSUER`), expiry and client (`azp` = `OPENVRE_OIDC_CLIENT_ID`) against Keycloak's public keys (`OPENVRE_OIDC_JWKS_URL`, default `<issuer>/protocol/openid-connect/certs`). Then:
+
+- New sessions and Jobs get the label `openvre.io/owner` (a hash of issuer and user `sub`, no personal data).
+- Reading or deleting a session or Job is allowed only for its owner, or for users with a role in `OPENVRE_OIDC_ADMIN_ROLES`. Others get "does not exist" / 404.
+- The per-user session limit counts the verified owner, not the `user_id` in the request body.
+- The audit record stores the verified `owner_sub`, `owner_username` and `owner_email`.
+- With `required`, requests without a valid user token get 401, and objects created before user tokens (no owner label) are reachable only by admin roles.
+
+The scheduler needs to reach Keycloak for its keys (chart: `scheduler.hostAliases`, `scheduler.oidcEgressCidrs`). Keys are cached for an hour and refetched when an unknown key id appears. If the keys cannot be fetched, requests fail with 503; they are never let through.
+
+What a compromised frontend can still do: act for users whose tokens it currently holds (logged-in users, for minutes), within the templates, policies and allowlists. It can no longer act as arbitrary users, act while nobody is logged in, or stop other users' sessions.
 
 ## API
 
@@ -286,7 +306,7 @@ objects:                           # ConfigMap, Deployment, Service, Ingress, in
 | `session.path` / `session.url` | text | `/interactive-tool/<tool>-<hex>` / with trailing `/` |
 | `session.namespace`, `session.user_id` | text | |
 | `session.labels` | mapping | `app`, `openvre.io/interactive`, `openvre.io/session`, `openvre.io/user`, `openvre.io/template`, managed-by |
-| `session.pod_labels` | mapping | `session.labels` plus `openvre.colocate` |
+| `session.pod_labels` | mapping | Same as `session.labels` |
 | `session.annotations` | mapping | session id, user id, created/expires, audit path, template version |
 | `session.mounts` | list | volumeMounts of the `userdata` volume, from `context.volume_mounts` (subPaths computed and checked) |
 | `session.audit_containers` / `session.audit_volumes` | list | The audit sidecar and the `admindata` volume; empty when audit is off. Use with `...` |
@@ -444,6 +464,11 @@ Read once at startup. The scheduler refuses to start (exit code 2, a `CRITICAL` 
 | Variable | Default | Purpose |
 |---|---|---|
 | `SCHEDULER_AUTH_TOKEN` | **required** | Bearer token, at least 16 characters. Comma-separated list allowed, for rotation (add new, roll frontend, remove old). A value starting with `CHANGEME` logs a warning. |
+| `OPENVRE_USER_TOKEN` | `off` | `off`, `optional` or `required` |
+| `OPENVRE_OIDC_ISSUER` | | Keycloak realm URL, e.g. `http://auth.vre.local/auth/realms/demoproject`; required unless user tokens are off |
+| `OPENVRE_OIDC_JWKS_URL` | `<issuer>/protocol/openid-connect/certs` | Keycloak public keys |
+| `OPENVRE_OIDC_CLIENT_ID` | | Expected `azp` (or audience) of user tokens, e.g. `open-vre` |
+| `OPENVRE_OIDC_ADMIN_ROLES` | | Keycloak roles that may act on other users' sessions and Jobs |
 | `SCHEDULER_LISTEN_PORT` | `8080` | Listen port (not `SCHEDULER_PORT`, which Kubernetes sets for the `scheduler` Service) |
 | `SCHEDULER_MAX_BODY_BYTES` | `1048576` | Largest accepted request body |
 | `SCHEDULER_REQUEST_TIMEOUT_SEC` | `30` | Socket timeout per client connection |
@@ -494,7 +519,7 @@ One JSON object per line on stdout. Every request logs `request_id`, `method`, `
 ## Running and testing
 
 ```bash
-make test              # 144 unit + HTTP tests (needs PyYAML)
+make test              # 155 unit + HTTP tests (needs requirements.txt)
 make image             # docker build -t openvre-scheduler:dev .
 ```
 

@@ -55,7 +55,7 @@ if (isset($_SERVER['OIDC_access_token'])) {
 } elseif (!isset($_GET['code'])) {
     $provider = new Oauth2Provider(['redirectUri' => $GLOBALS['URL'] . "applib/loginToken.php"]);
     // Fetch the authorization URL from the provider; returns urlAuthorize and generates state
-    $authorizationUrl = $provider->getAuthorizationUrl();
+    $authorizationUrl = $provider->getAuthorizationUrl(['scope' => "openid profile email"]);
 
     header('Location: ' . $authorizationUrl);
     exit;

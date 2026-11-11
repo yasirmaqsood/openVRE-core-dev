@@ -45,7 +45,7 @@ class FakeKube:
         if self.unreachable:
             raise K8sError(0, "Kubernetes API unreachable: test")
 
-    def get(self, path, query=None):
+    def get(self, path, query=None, accept="application/json"):
         self._check()
         obj = self.objects.get(path)
         return copy.deepcopy(obj) if obj is not None else None
@@ -110,7 +110,7 @@ def php_job_manifest(name="openvre-bj-user-run-1a2b3c4d", ns="openvre", image="g
             "backoffLimit": 0,
             "template": {
                 "metadata": {"labels": {"app.kubernetes.io/managed-by": "openvre", "openvre-job-id": name,
-                                        "openvre.colocate": "true", "openvre.io/batch": "true"}},
+                                        "openvre.io/batch": "true"}},
                 "spec": {
                     "automountServiceAccountToken": False,
                     "restartPolicy": "Never",

@@ -68,6 +68,11 @@ class SessionSpec:
     expires_at: str = ""
     audit_host_path: str = ""
     access: dict = field(default_factory=dict)
+    # Set from the verified user token (layer 2), empty when user tokens are off.
+    owner: str = ""
+    owner_sub: str = ""
+    owner_name: str = ""
+    owner_email: str = ""
 
 
 # Node placement (shared with the batch Job template via {{ config.* }}) -------
@@ -112,20 +117,14 @@ def tolerations(settings):
 
 
 def affinity(settings):
-    """Prefer the home worker; also sit with other OpenVRE pods."""
-    out = {}
-    if settings.preferred_hostname:
-        out["nodeAffinity"] = {"preferredDuringSchedulingIgnoredDuringExecution": [{
-            "weight": 100,
-            "preference": {"matchExpressions": [{
-                "key": "kubernetes.io/hostname", "operator": "In", "values": [settings.preferred_hostname]}]},
-        }]}
-    out["podAffinity"] = {"preferredDuringSchedulingIgnoredDuringExecution": [{
+    """Prefer one node while it is Ready (OPENVRE_PREFERRED_HOSTNAME); None: no affinity."""
+    if not settings.preferred_hostname:
+        return None
+    return {"nodeAffinity": {"preferredDuringSchedulingIgnoredDuringExecution": [{
         "weight": 100,
-        "podAffinityTerm": {"labelSelector": {"matchLabels": {"openvre.colocate": "true"}},
-                            "topologyKey": "kubernetes.io/hostname"},
-    }]}
-    return out
+        "preference": {"matchExpressions": [{
+            "key": "kubernetes.io/hostname", "operator": "In", "values": [settings.preferred_hostname]}]},
+    }]}}
 
 
 def external_base_host(external_base):
@@ -139,8 +138,11 @@ def external_base_host(external_base):
 
 # Session building blocks ----------------------------------------------------
 
+OWNER_LABEL = "openvre.io/owner"
+
+
 def labels(spec):
-    return {
+    out = {
         "app": spec.name,
         INTERACTIVE_LABEL: "true",
         "app.kubernetes.io/managed-by": MANAGED_BY,
@@ -148,6 +150,9 @@ def labels(spec):
         USER_LABEL: v.label_value(spec.user_id),
         TEMPLATE_LABEL: spec.template,
     }
+    if spec.owner:
+        out[OWNER_LABEL] = spec.owner
+    return out
 
 
 def annotations(spec):
@@ -287,7 +292,7 @@ def building_blocks(spec, settings, values):
         "namespace": spec.namespace,
         "user_id": spec.user_id,
         "labels": lbl,
-        "pod_labels": {**lbl, "openvre.colocate": "true"},
+        "pod_labels": dict(lbl),
         "annotations": annotations(spec),
         "mounts": mounts,
         "audit_containers": audit_containers,

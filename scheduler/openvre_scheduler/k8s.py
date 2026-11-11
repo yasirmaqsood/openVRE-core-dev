@@ -59,7 +59,7 @@ class KubeClient:
                 self._token_mtime = mtime
             return self._token
 
-    def request(self, method, path, body=None, content_type="application/json", query=None):
+    def request(self, method, path, body=None, content_type="application/json", query=None, accept="application/json"):
         """Return (status, parsed JSON or None). Raises K8sError on errors other than 404."""
         url = f"https://{self.s.api_host}:{self.s.api_port}{path}"
         if query:
@@ -69,7 +69,7 @@ class KubeClient:
             data = (body if isinstance(body, str) else json.dumps(body)).encode("utf-8")
         req = urllib.request.Request(url, method=method, data=data)
         req.add_header("Authorization", f"Bearer {self.token()}")
-        req.add_header("Accept", "application/json")
+        req.add_header("Accept", accept)
         if data is not None:
             req.add_header("Content-Type", content_type)
         try:
@@ -87,8 +87,8 @@ class KubeClient:
 
     # Convenience wrappers ------------------------------------------------
 
-    def get(self, path, query=None):
-        code, obj = self.request("GET", path, query=query)
+    def get(self, path, query=None, accept="application/json"):
+        code, obj = self.request("GET", path, query=query, accept=accept)
         return None if code == 404 else obj
 
     def create(self, path, obj):

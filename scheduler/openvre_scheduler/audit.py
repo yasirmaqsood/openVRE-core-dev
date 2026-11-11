@@ -105,6 +105,10 @@ def write_create(audit_dir, spec, objects):
         execution_id=spec.name,
         session_id=spec.session_id,
         user_id=spec.user_id,
+        # From the verified Keycloak token when user tokens are on.
+        owner_sub=spec.owner_sub,
+        owner_username=spec.owner_name,
+        owner_email=spec.owner_email,
         tool_id=spec.tool_id,
         tool_name=spec.tool_name,
         template=spec.template,

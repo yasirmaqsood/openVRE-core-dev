@@ -5,6 +5,7 @@ import logging
 
 from . import policy
 from . import validation as v
+from .auth import OWNER_LABEL
 from .k8s import q
 
 log = logging.getLogger("openvre_scheduler.jobs")
@@ -56,8 +57,12 @@ def build(body, ns, settings, templates):
     return job, source
 
 
-def create(kube, settings, templates, ns, body):
+def create(kube, settings, templates, ns, body, owner=None):
     job, source = build(body, ns, settings, templates)
+    if owner:
+        # Verified user (layer 2): only this user may read or delete the Job.
+        job["metadata"].setdefault("labels", {})[OWNER_LABEL] = owner
+        job["spec"]["template"].setdefault("metadata", {}).setdefault("labels", {})[OWNER_LABEL] = owner
     created = kube.create(_path(ns), job)
     return (created or job), source
 

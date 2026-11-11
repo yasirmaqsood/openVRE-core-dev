@@ -91,7 +91,6 @@ manifest:
         labels:
           app.kubernetes.io/managed-by: openvre
           openvre-job-id: "{{ job_name }}"
-          openvre.colocate: "true"
           # The batch NetworkPolicy selects this label: no ingress, no egress.
           openvre.io/batch: "true"
       spec:

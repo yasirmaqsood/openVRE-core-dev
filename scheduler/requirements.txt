@@ -1,2 +1,5 @@
-# Only dependency: reading the YAML workload templates (scheduler/templates/).
+# Reading the YAML workload templates (scheduler/templates/).
 PyYAML==6.0.2
+# Checking the signature of the user's Keycloak token.
+PyJWT==2.9.0
+cryptography==43.0.3

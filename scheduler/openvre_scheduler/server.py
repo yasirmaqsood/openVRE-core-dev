@@ -26,6 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import __version__, config, jobs, sessions, templates
 from . import validation as v
+from .auth import AuthError, Authenticator, may_access
 from .k8s import K8sError, KubeClient
 
 log = logging.getLogger("openvre_scheduler")
@@ -82,6 +83,7 @@ class Handler(BaseHTTPRequestHandler):
     settings = None
     kube = None
     templates = {}
+    auth = None
     _ready_cache = {"at": 0.0, "ok": False, "error": ""}
     _ready_lock = threading.Lock()
 
@@ -108,17 +110,6 @@ class Handler(BaseHTTPRequestHandler):
 
     def _error(self, status, message):
         self._send(status, {"ok": False, "error": message, "request_id": self.request_id})
-
-    def _authorized(self):
-        header = self.headers.get("Authorization", "")
-        if not header.startswith("Bearer "):
-            return False
-        given = header[len("Bearer "):].encode("utf-8")
-        ok = False
-        for token in self.settings.auth_tokens:
-            # compare_digest takes the same time whether or not the token matches.
-            ok |= hmac.compare_digest(given, token.encode("utf-8"))
-        return ok
 
     def _body(self):
         length = self.headers.get("Content-Length")
@@ -153,6 +144,8 @@ class Handler(BaseHTTPRequestHandler):
     def _handle(self, method):
         self.request_id = (self.headers.get("X-Request-ID") or "")[:64] or uuid.uuid4().hex
         self._status = 0
+        self.caller = None
+        self.user = None
         start = time.monotonic()
         path, segs, query = self._route()
         try:
@@ -160,8 +153,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "version": __version__})
             if path == "/readyz" and method == "GET":
                 return self._readyz()
-            if not self._authorized():
-                raise ApiError(401, "unauthorized")
+            try:
+                self.caller = self.auth.caller(self.headers.get("Authorization", ""))
+                if segs[:1] in (["jobs"], ["interactive-sessions"]):
+                    self.user = self.auth.user(self.headers.get("X-OpenVRE-User-Token"))
+            except AuthError as e:
+                raise ApiError(e.status, e.message)
             ns_param = (query.get("namespace") or [""])[0]
             if segs[:1] == ["jobs"]:
                 return self._jobs(method, segs, ns_param)
@@ -187,6 +184,8 @@ class Handler(BaseHTTPRequestHandler):
                 "request_id": self.request_id, "method": method, "path": path,
                 "status": self._status, "duration_ms": round((time.monotonic() - start) * 1000, 1),
                 "client": self.client_address[0] if self.client_address else "",
+                "caller": self.caller.name if self.caller else "",
+                "user": self.user.log_name() if self.user else "",
             })
 
     def do_GET(self):
@@ -219,7 +218,7 @@ class Handler(BaseHTTPRequestHandler):
         if method == "POST" and len(segs) == 1:
             body = self._body()
             ns = v.namespace(body.get("namespace"), s)
-            job, template = jobs.create(kube, s, self.templates, ns, body)
+            job, template = jobs.create(kube, s, self.templates, ns, body, owner=self.user.owner if self.user else None)
             name = job.get("metadata", {}).get("name", "")
             log.info("job created", extra={"request_id": self.request_id, "job": name, "namespace": ns,
                                            "template": template or "(raw manifest)"})
@@ -231,12 +230,17 @@ class Handler(BaseHTTPRequestHandler):
         name = v.job_name(segs[1])
         if method == "GET":
             job = jobs.get(kube, ns, name)
+            if job is not None and not may_access(self.user, job, s):
+                job = None  # someone else's Job: answer as if it did not exist
             if job is None:
                 return self._send(200, {"ok": True, "exists": False, "job": ""})
             return self._send(200, {"ok": True, "exists": True, "status": jobs.summarize(job),
                                     # Raw Job kept as a string for frontends that parse it themselves.
                                     "job": json.dumps(job)})
         if method == "DELETE":
+            job = jobs.get(kube, ns, name)
+            if job is not None and not may_access(self.user, job, s):
+                raise ApiError(404, "not found")
             deleted = jobs.delete(kube, ns, name)
             msg = f"job.batch/{name} deleted" if deleted else f"job.batch/{name} already deleted"
             log.info("job deleted", extra={"request_id": self.request_id, "job": name, "found": deleted})
@@ -254,6 +258,9 @@ class Handler(BaseHTTPRequestHandler):
         s, kube = self.settings, self.kube
         if method == "POST" and len(segs) == 1:
             tpl, spec, values = sessions.parse_request(self._body(), s, self.templates)
+            if self.user:
+                spec.owner, spec.owner_sub, spec.owner_name = self.user.owner, self.user.sub, self.user.username
+                spec.owner_email = self.user.email
             sessions.create(kube, s, tpl, spec, values)
             log.info("session created", extra={"request_id": self.request_id, "session": spec.name,
                                                "namespace": spec.namespace, "user": spec.user_id,
@@ -277,6 +284,8 @@ class Handler(BaseHTTPRequestHandler):
         name = v.session_name(segs[1])
         if method == "GET":
             st = sessions.status(kube, ns, name)
+            if st is not None and not may_access(self.user, st["deployment"], s):
+                st = None
             if st is None:
                 return self._send(200, {"ok": True, "exists": False, "deployment": ""})
             out = {"ok": True, "exists": True, "state": st["state"], "reason": st.get("reason", ""),
@@ -285,6 +294,9 @@ class Handler(BaseHTTPRequestHandler):
                 out["message"] = st["message"]
             return self._send(200, out)
         if method == "DELETE":
+            dep = sessions.get_deployment(kube, ns, name)
+            if dep is not None and not may_access(self.user, dep, s):
+                raise ApiError(404, "not found")
             found, errors = sessions.delete(kube, s, ns, name)
             if errors:
                 raise ApiError(502, "could not delete every session object: " + "; ".join(errors))
@@ -300,7 +312,8 @@ class Server(ThreadingHTTPServer):
 
 
 def make_server(settings, kube, tpls):
-    handler = type("BoundHandler", (Handler,), {"settings": settings, "kube": kube, "templates": tpls})
+    handler = type("BoundHandler", (Handler,), {"settings": settings, "kube": kube, "templates": tpls,
+                                                "auth": Authenticator(settings, kube)})
     return Server((settings.listen_host, settings.listen_port), handler)
 
 
@@ -337,6 +350,7 @@ def main():
         "strict": settings.strict, "audit": settings.audit_enabled,
         "session_ttl_hours": settings.session_ttl_hours, "max_sessions_per_user": settings.max_sessions_per_user,
         "templates": sorted(tpls), "raw_job_manifests": settings.allow_raw_job_manifests,
+        "user_token": settings.user_token,
     })
     server.serve_forever()
     server.server_close()

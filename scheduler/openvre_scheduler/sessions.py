@@ -127,16 +127,22 @@ def build(tpl, spec, values, settings):
     return objects, access
 
 
-def count_user_sessions(kube, ns, user_id):
-    selector = f"{mf.INTERACTIVE_LABEL}=true,{mf.USER_LABEL}={v.label_value(user_id)}"
-    return len(kube.list(f"/apis/apps/v1/namespaces/{q(ns)}/deployments", selector))
+def count_user_sessions(kube, spec):
+    """Sessions of this user: by verified owner when user tokens are on, else by user id."""
+    who = f"{mf.OWNER_LABEL}={spec.owner}" if spec.owner else f"{mf.USER_LABEL}={v.label_value(spec.user_id)}"
+    return len(kube.list(f"/apis/apps/v1/namespaces/{q(spec.namespace)}/deployments", f"{mf.INTERACTIVE_LABEL}=true,{who}"))
+
+
+def get_deployment(kube, ns, name):
+    dep = kube.get(_object_path("Deployment", ns, name))
+    return dep if dep is not None and _is_managed(dep) else None
 
 
 def create(kube, settings, tpl, spec, values):
     """Create every object of a session. On failure, delete only what this call created."""
     with _create_lock:
         if settings.max_sessions_per_user:
-            n = count_user_sessions(kube, spec.namespace, spec.user_id)
+            n = count_user_sessions(kube, spec)
             v.require(n < settings.max_sessions_per_user,
                       f"session limit reached ({settings.max_sessions_per_user} per user); stop a running session first", 429)
 
