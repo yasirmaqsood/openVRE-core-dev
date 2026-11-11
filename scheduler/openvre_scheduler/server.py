@@ -11,6 +11,8 @@ Routes (each also available under /v1/...):
   POST   /interactive-sessions         create a session: {"template", "context", "params"}
   GET    /interactive-sessions/<name>  session status
   DELETE /interactive-sessions/<name>  delete a session
+  GET    /gateway/routes               Traefik dynamic configuration of the session routes;
+                                       only with X-OpenVRE-Gateway-Token (the gateway's token)
 """
 
 import hmac
@@ -24,7 +26,7 @@ import urllib.parse
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import __version__, config, jobs, sessions, templates
+from . import __version__, config, gateway, jobs, sessions, templates
 from . import validation as v
 from .auth import AuthError, Authenticator, may_access
 from .k8s import K8sError, KubeClient
@@ -153,6 +155,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "version": __version__})
             if path == "/readyz" and method == "GET":
                 return self._readyz()
+            if path == "/gateway/routes" and method == "GET":
+                return self._gateway_routes()
             try:
                 self.caller = self.auth.caller(self.headers.get("Authorization", ""))
                 if segs[:1] in (["jobs"], ["interactive-sessions"]):
@@ -180,7 +184,9 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("unhandled error", extra={"request_id": self.request_id})
             self._error(500, "internal error")
         finally:
-            log.info("request", extra={
+            # The gateway polls every few seconds: keep those out of the INFO log.
+            level = logging.DEBUG if path == "/gateway/routes" and self._status == 200 else logging.INFO
+            log.log(level, "request", extra={
                 "request_id": self.request_id, "method": method, "path": path,
                 "status": self._status, "duration_ms": round((time.monotonic() - start) * 1000, 1),
                 "client": self.client_address[0] if self.client_address else "",
@@ -198,6 +204,12 @@ class Handler(BaseHTTPRequestHandler):
         self._handle("DELETE")
 
     # Endpoints -----------------------------------------------------------
+
+    def _gateway_routes(self):
+        token = (self.headers.get("X-OpenVRE-Gateway-Token") or "").strip().encode("utf-8")
+        if not token or not hmac.compare_digest(token, self.settings.gateway_token.encode("utf-8")):
+            raise ApiError(401, "gateway token missing or invalid")
+        return self._send(200, gateway.routes(self.kube, self.settings))
 
     def _readyz(self):
         cache = Handler._ready_cache
@@ -262,6 +274,7 @@ class Handler(BaseHTTPRequestHandler):
                 spec.owner, spec.owner_sub, spec.owner_name = self.user.owner, self.user.sub, self.user.username
                 spec.owner_email = self.user.email
             sessions.create(kube, s, tpl, spec, values)
+            gateway.clear_cache()
             log.info("session created", extra={"request_id": self.request_id, "session": spec.name,
                                                "namespace": spec.namespace, "user": spec.user_id,
                                                "template": spec.template, "image": spec.image})
@@ -298,6 +311,7 @@ class Handler(BaseHTTPRequestHandler):
             if dep is not None and not may_access(self.user, dep, s):
                 raise ApiError(404, "not found")
             found, errors = sessions.delete(kube, s, ns, name)
+            gateway.clear_cache()
             if errors:
                 raise ApiError(502, "could not delete every session object: " + "; ".join(errors))
             log.info("session deleted", extra={"request_id": self.request_id, "session": name, "found": found})

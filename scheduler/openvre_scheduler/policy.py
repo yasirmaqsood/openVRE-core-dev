@@ -219,8 +219,6 @@ def check_session_objects(objects, spec, blocks, settings, log=None):
     objs = copy.deepcopy(objects)
     errs = []
     name = spec.name
-    has_proxy_cm = any(o.get("kind") == "ConfigMap" and o.get("metadata", {}).get("name") == name + mf.PROXY_HEADERS_SUFFIX
-                       for o in objs)
     admin_pvc = settings.admindata_pvc or settings.userdata_pvc
     separate_admin = admin_pvc not in settings.allowed_pvcs
 
@@ -253,14 +251,22 @@ def check_session_objects(objects, spec, blocks, settings, log=None):
                 if isinstance(p, dict) and p.get("nodePort"):
                     errs.append(f"{where}: nodePort is not allowed")
             sp["selector"] = {"app": name}
-        elif kind == "Ingress":
-            errs.extend(_check_session_ingress(obj, where, name, blocks, settings, has_proxy_cm))
+            ann = {k: val for k, val in (meta.get("annotations") or {}).items()
+                   if not k.startswith("openvre.io/gateway-")}
+            if spec.access_type == "web" and oname == name:
+                # The gateway routes the session path to this Service (scheduler /gateway/routes).
+                ann.update(blocks["gateway_annotations"])
+            # Desktop sessions are only reachable through Guacamole: never a gateway route.
+            meta["annotations"] = ann
         elif kind == "ConfigMap":
             if obj.get("binaryData"):
                 errs.append(f"{where}: binaryData is not allowed")
             data = obj.get("data") or {}
             if not all(isinstance(k, str) and isinstance(val, str) for k, val in data.items()):
                 errs.append(f"{where}: data values must be strings")
+    if spec.access_type == "web" and not any(
+            o.get("kind") == "Service" and o.get("metadata", {}).get("name") == name for o in objs):
+        errs.append(f"a web session needs a Service named {name!r}: the gateway routes to it")
     return (None if errs else objs), errs
 
 
@@ -326,35 +332,4 @@ def _check_session_deployment(obj, where, blocks, settings, admin_pvc, separate_
             v.pull_secrets(extra, settings)
         except v.ValidationError as e:
             errs.append(f"{where}: {e.message}")
-    return errs
-
-
-def _check_session_ingress(obj, where, name, blocks, settings, has_proxy_cm):
-    errs = []
-    if not settings.ingress_class:
-        errs.append("OPENVRE_INGRESS_CLASS is not set on the scheduler")
-    meta = obj["metadata"]
-    ann = meta.get("annotations") or {}
-    for k in ann:
-        # nginx snippet annotations run arbitrary nginx config: never from a template.
-        if "snippet" in k.lower():
-            errs.append(f"{where}: annotation {k!r} is not allowed")
-    ann.update(blocks["ingress_annotations"])
-    if has_proxy_cm:
-        ann["nginx.ingress.kubernetes.io/proxy-set-headers"] = f"{obj['metadata']['namespace']}/{name}-proxy-hdr"
-    meta["annotations"] = ann
-    sp = obj.setdefault("spec", {})
-    sp["ingressClassName"] = settings.ingress_class
-    if sp.get("tls") or sp.get("defaultBackend"):
-        errs.append(f"{where}: tls and defaultBackend are not allowed (TLS is handled by the main ingress)")
-    host = blocks["ingress_host"]
-    for rule in sp.get("rules") or []:
-        if host:
-            rule["host"] = host
-        elif "host" in rule:
-            rule.pop("host")
-        for p in ((rule.get("http") or {}).get("paths") or []):
-            svc = ((p.get("backend") or {}).get("service") or {}).get("name")
-            if svc != name:
-                errs.append(f"{where}: backends must point to the session Service {name!r}")
     return errs

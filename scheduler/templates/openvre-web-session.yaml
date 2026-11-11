@@ -6,7 +6,8 @@
 # Guacamole desktops. A new web tool normally needs only a tool definition with
 # different parameters (image, port, env, ...), not a new template.
 #
-# Objects: ConfigMap (proxy headers) -> Deployment -> Service -> Ingress.
+# Objects: Deployment -> Service. The openvre-gateway (Traefik) routes
+# /interactive-tool/<session>/ to the Service; no Ingress is created per session.
 #
 # {{ session.* }} values are computed by the scheduler (scheduler/README.md,
 # "Session building blocks"). The scheduler's session policy checks every object
@@ -17,7 +18,7 @@
 
 name: openvre-web-session
 version: "1"
-description: Browser-based tool behind /interactive-tool/<session>/ (Deployment, Service, Ingress).
+description: Browser-based tool behind /interactive-tool/<session>/ (Deployment, Service; routed by the gateway).
 kind: InteractiveSession
 
 access:
@@ -76,15 +77,6 @@ parameters:
     description: Extra request headers; {{PATH_PREFIX}} in a value becomes the session path.
 
 objects:
-  # Headers nginx adds to every request (X-Forwarded-Proto, prefix headers).
-  # Keep the name "<session>-proxy-hdr": the scheduler links the Ingress to it.
-  - apiVersion: v1
-    kind: ConfigMap
-    metadata:
-      name: "{{ session.name }}-proxy-hdr"
-      labels: "{{ session.labels }}"
-    data: "{{ session.proxy_headers }}"
-
   - apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -138,11 +130,14 @@ objects:
                 claimName: "{{ config.userdata_pvc }}"
             - "{{ ...session.audit_volumes }}"
 
+  # The gateway routes the session path here, with the request headers
+  # (X-Forwarded-Proto, prefix headers) from session.gateway_annotations.
   - apiVersion: v1
     kind: Service
     metadata:
       name: "{{ session.name }}"
       labels: "{{ session.labels }}"
+      annotations: "{{ session.gateway_annotations }}"
     spec:
       selector:
         app: "{{ session.name }}"
@@ -150,23 +145,3 @@ objects:
         - name: http
           port: "{{ port }}"
           targetPort: "{{ port }}"
-
-  - apiVersion: networking.k8s.io/v1
-    kind: Ingress
-    metadata:
-      name: "{{ session.name }}"
-      labels: "{{ session.labels }}"
-      annotations: "{{ session.ingress_annotations }}"
-    spec:
-      ingressClassName: "{{ config.ingress_class }}"
-      rules:
-        - host: "{{ session.ingress_host }}"
-          http:
-            paths:
-              - path: "{{ session.ingress_path }}"
-                pathType: ImplementationSpecific
-                backend:
-                  service:
-                    name: "{{ session.name }}"
-                    port:
-                      number: "{{ port }}"

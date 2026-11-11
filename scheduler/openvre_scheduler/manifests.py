@@ -3,11 +3,11 @@ the shared helpers for node placement.
 
 The session templates (templates/openvre-*-session.yaml) decide which objects
 a session has and how they fit together. The parts that need logic (mounts,
-the audit sidecar, labels, Ingress settings) are computed here, so templates
+the audit sidecar, labels, gateway route settings) are computed here, so templates
 stay declarative and every template gets the same, tested behaviour.
 """
 
-import urllib.parse
+import json
 from dataclasses import dataclass, field
 
 from . import validation as v
@@ -26,7 +26,10 @@ CREATED_ANNOTATION = "openvre.io/created-at"
 EXPIRES_ANNOTATION = "openvre.io/expires-at"
 AUDIT_ANNOTATION = "openvre.io/audit-host-path"
 TEMPLATE_VERSION_ANNOTATION = "openvre.io/template-version"
-PROXY_HEADERS_SUFFIX = "-proxy-hdr"
+# On a session's Service: the openvre-gateway (Traefik) routes this path to it,
+# adding these request headers (scheduler /gateway/routes reads them back).
+GATEWAY_PATH_ANNOTATION = "openvre.io/gateway-path"
+GATEWAY_HEADERS_ANNOTATION = "openvre.io/gateway-headers"
 
 # RStudio writes lots of session metadata under home; keep user files, drop internals.
 DEFAULT_AUDIT_EXCLUDE_PREFIXES = ",".join([
@@ -39,7 +42,6 @@ API_PATHS = {
     "ConfigMap": "/api/v1/namespaces/{ns}/configmaps",
     "Deployment": "/apis/apps/v1/namespaces/{ns}/deployments",
     "Service": "/api/v1/namespaces/{ns}/services",
-    "Ingress": "/apis/networking.k8s.io/v1/namespaces/{ns}/ingresses",
 }
 
 
@@ -125,15 +127,6 @@ def affinity(settings):
         "preference": {"matchExpressions": [{
             "key": "kubernetes.io/hostname", "operator": "In", "values": [settings.preferred_hostname]}]},
     }]}}
-
-
-def external_base_host(external_base):
-    base = (external_base or "").strip()
-    if not base:
-        return None
-    if "://" not in base:
-        base = f"http://{base}"
-    return urllib.parse.urlparse(base).hostname or None
 
 
 # Session building blocks ----------------------------------------------------
@@ -251,30 +244,12 @@ def proxy_headers(spec, settings, values):
     return data
 
 
-def ingress_annotations(spec, settings):
-    path = spec.path_prefix.rstrip("/")
-    base = spec.external_base.rstrip("/")
-    ann = {
-        "nginx.ingress.kubernetes.io/proxy-read-timeout": "3600",
-        "nginx.ingress.kubernetes.io/proxy-send-timeout": "3600",
-        "nginx.ingress.kubernetes.io/proxy-body-size": "0",
-        "nginx.ingress.kubernetes.io/proxy-http-version": "1.1",
-        "nginx.ingress.kubernetes.io/rewrite-target": "/$2",
-        "nginx.ingress.kubernetes.io/use-regex": "true",
-        # Route before the main app ingress catch-all path "/" on the same host.
-        "nginx.ingress.kubernetes.io/priority": "100",
+def gateway_annotations(spec, settings, values):
+    """Annotations on the session Service that tell the gateway how to route it."""
+    return {
+        GATEWAY_PATH_ANNOTATION: spec.path_prefix.rstrip("/"),
+        GATEWAY_HEADERS_ANNOTATION: json.dumps(proxy_headers(spec, settings, values), sort_keys=True),
     }
-    if settings.auth_url:
-        ann["nginx.ingress.kubernetes.io/auth-url"] = settings.auth_url
-        if settings.auth_signin:
-            signin = settings.auth_signin
-            if "$escaped_request_uri" not in signin:
-                signin += ("&" if "?" in signin else "?") + "rd=$escaped_request_uri"
-            ann["nginx.ingress.kubernetes.io/auth-signin"] = signin
-    if base:
-        ann["nginx.ingress.kubernetes.io/proxy-redirect-from"] = f"{base}/"
-        ann["nginx.ingress.kubernetes.io/proxy-redirect-to"] = f"{base}{path}/"
-    return ann
 
 
 def building_blocks(spec, settings, values):
@@ -300,8 +275,5 @@ def building_blocks(spec, settings, values):
         "readiness_probe": readiness_probe(values["port"], values.get("readiness_path", "")),
         "command": ["sh", "-lc", executable] if executable else None,
         "pull_secrets": pull,
-        "proxy_headers": proxy_headers(spec, settings, values),
-        "ingress_host": external_base_host(spec.external_base),
-        "ingress_path": f"{spec.path_prefix.rstrip('/')}(/|$)(.*)",
-        "ingress_annotations": ingress_annotations(spec, settings),
+        "gateway_annotations": gateway_annotations(spec, settings, values),
     }

@@ -1,5 +1,6 @@
 import copy
 import tempfile
+import json
 import unittest
 from datetime import datetime, timedelta, timezone
 
@@ -91,9 +92,8 @@ class WebTemplateTests(unittest.TestCase):
 
     def test_objects(self):
         spec, objs, access = render(session_body(), self.s)
-        self.assertEqual(list(objs), ["ConfigMap", "Deployment", "Service", "Ingress"])
+        self.assertEqual(list(objs), ["Deployment", "Service"])
         self.assertEqual(access, {"type": "web", "url": spec.path_prefix + "/"})
-        self.assertEqual(objs["ConfigMap"]["metadata"]["name"], spec.name + "-proxy-hdr")
         for o in objs.values():
             self.assertEqual(o["metadata"]["namespace"], "openvre")
             self.assertEqual(o["metadata"]["labels"]["openvre.io/session"], spec.name)
@@ -125,32 +125,20 @@ class WebTemplateTests(unittest.TestCase):
         self.assertEqual(tool["command"], ["sh", "-lc", "start.sh --x"])
         self.assertEqual(tool["readinessProbe"]["httpGet"], {"path": "/api", "port": 8888})
         self.assertEqual(tool["env"], [{"name": "A", "value": "1"}])
-        self.assertEqual(objs["ConfigMap"]["data"]["X-Forwarded-Prefix"], spec.path_prefix)
-        self.assertEqual(objs["ConfigMap"]["data"]["X-P"], spec.path_prefix + "/z")
+        headers = json.loads(objs["Service"]["metadata"]["annotations"][mf.GATEWAY_HEADERS_ANNOTATION])
+        self.assertEqual(headers["X-Forwarded-Prefix"], spec.path_prefix)
+        self.assertEqual(headers["X-P"], spec.path_prefix + "/z")
 
-    def test_ingress(self):
+    def test_gateway_annotations(self):
         spec, objs, _ = render(session_body(), self.s)
-        ing = objs["Ingress"]
-        rule = ing["spec"]["rules"][0]
-        self.assertEqual(rule["host"], "vre.example.org")
-        self.assertEqual(rule["http"]["paths"][0]["path"], spec.path_prefix + "(/|$)(.*)")
-        self.assertEqual(ing["spec"]["ingressClassName"], "nginx")
-        ann = ing["metadata"]["annotations"]
-        self.assertEqual(ann["nginx.ingress.kubernetes.io/proxy-set-headers"], f"openvre/{spec.name}-proxy-hdr")
-        self.assertEqual(ann["nginx.ingress.kubernetes.io/rewrite-target"], "/$2")
+        ann = objs["Service"]["metadata"]["annotations"]
+        self.assertEqual(ann[mf.GATEWAY_PATH_ANNOTATION], spec.path_prefix)
+        self.assertEqual(json.loads(ann[mf.GATEWAY_HEADERS_ANNOTATION]), {"X-Forwarded-Proto": "https"})
 
-    def test_no_external_base_drops_host(self):
-        s = settings(OPENVRE_EXTERNAL_BASE="")
-        body = session_body(external_base="")
-        _, objs, _ = render(body, s)
-        self.assertNotIn("host", objs["Ingress"]["spec"]["rules"][0])
-
-    def test_auth_annotations(self):
-        s = settings(OPENVRE_INTERACTIVE_AUTH_URL="http://auth/check", OPENVRE_INTERACTIVE_AUTH_SIGNIN="https://vre/login")
-        _, objs, _ = render(session_body(), s)
-        ann = objs["Ingress"]["metadata"]["annotations"]
-        self.assertEqual(ann["nginx.ingress.kubernetes.io/auth-url"], "http://auth/check")
-        self.assertIn("rd=$escaped_request_uri", ann["nginx.ingress.kubernetes.io/auth-signin"])
+    def test_http_external_base(self):
+        _, objs, _ = render(session_body(), settings(OPENVRE_EXTERNAL_BASE="http://vre.local"))
+        headers = json.loads(objs["Service"]["metadata"]["annotations"][mf.GATEWAY_HEADERS_ANNOTATION])
+        self.assertEqual(headers["X-Forwarded-Proto"], "http")
 
 
 class DesktopTemplateTests(unittest.TestCase):
@@ -166,10 +154,9 @@ class DesktopTemplateTests(unittest.TestCase):
         with self.assertRaises(v.ValidationError):
             parse(body, settings())
 
-    def test_no_ingress_class_needed(self):
-        render(desktop_body(), settings(OPENVRE_INGRESS_CLASS=""))
-        with self.assertRaisesRegex(v.ValidationError, "INGRESS_CLASS"):
-            parse(session_body(), settings(OPENVRE_INGRESS_CLASS=""))
+    def test_no_gateway_route(self):
+        _, objs, _ = render(desktop_body(), settings())
+        self.assertNotIn(mf.GATEWAY_PATH_ANNOTATION, objs["Service"]["metadata"].get("annotations") or {})
 
 
 class SessionPolicyTests(unittest.TestCase):
@@ -246,14 +233,27 @@ class SessionPolicyTests(unittest.TestCase):
         self.assertRejected(lambda o: o["Service"]["spec"].update(type="NodePort"), "ClusterIP")
         self.assertRejected(lambda o: o["Service"]["spec"].update(type="LoadBalancer"), "ClusterIP")
 
-    def test_ingress_rules(self):
-        self.assertRejected(lambda o: o["Ingress"]["metadata"]["annotations"].update(
-            {"nginx.ingress.kubernetes.io/configuration-snippet": "x"}), "not allowed")
-        self.assertRejected(lambda o: o["Ingress"]["spec"]["rules"][0]["http"]["paths"][0]["backend"]["service"].update(
-            name="dashboard-frontend"), "session Service")
-        self.assertRejected(lambda o: o["Ingress"]["spec"].update(tls=[{"secretName": "x"}]), "tls")
-        out, _ = self.check(lambda o: o["Ingress"]["spec"]["rules"][0].update(host="evil.example"))
-        self.assertEqual([x for x in out if x["kind"] == "Ingress"][0]["spec"]["rules"][0]["host"], "vre.example.org")
+    def check_list(self, objs):
+        return policy.check_session_objects(objs, self.spec, self.blocks, self.s)
+
+    def test_no_ingress(self):
+        objs = copy.deepcopy(self.objs) + [{"apiVersion": "networking.k8s.io/v1", "kind": "Ingress",
+                                            "metadata": {"name": self.spec.name}, "spec": {}}]
+        out, errs = self.check_list(objs)
+        self.assertIsNone(out)
+        self.assertTrue(any("kind 'Ingress' is not allowed" in e for e in errs), errs)
+
+    def test_gateway_annotations_forced(self):
+        out, errs = self.check(lambda o: o["Service"]["metadata"].update(
+            annotations={mf.GATEWAY_PATH_ANNOTATION: "/interactive-tool/someone-else"}))
+        self.assertEqual(errs, [])
+        svc = [x for x in out if x["kind"] == "Service"][0]
+        self.assertEqual(svc["metadata"]["annotations"][mf.GATEWAY_PATH_ANNOTATION], self.spec.path_prefix)
+
+    def test_web_session_needs_service(self):
+        out, errs = self.check_list([o for o in copy.deepcopy(self.objs) if o["kind"] != "Service"])
+        self.assertIsNone(out)
+        self.assertTrue(any("needs a Service" in e for e in errs), errs)
 
     def test_names(self):
         self.assertRejected(lambda o: o["Service"]["metadata"].update(name="dashboard-frontend"), "start with")
@@ -276,7 +276,7 @@ class CreateDeleteTests(unittest.TestCase):
 
     def test_create_and_status(self):
         spec = self.create()
-        self.assertEqual(len(self.kube.created), 4)
+        self.assertEqual(len(self.kube.created), 2)
         self.assertEqual(sessions.status(self.kube, "openvre", spec.name)["state"], "Pending")
         self.kube.objects[f"{DEP_PATH}/{spec.name}"]["status"] = {"readyReplicas": 1}
         self.assertEqual(sessions.status(self.kube, "openvre", spec.name)["state"], "Running")
@@ -291,11 +291,11 @@ class CreateDeleteTests(unittest.TestCase):
         self.assertEqual((st["state"], st["reason"]), ("Failed", "ImagePullBackOff"))
 
     def test_rollback_only_own_objects(self):
-        self.kube.fail_create_kind = "Ingress"
+        self.kube.fail_create_kind = "Service"
         with self.assertRaises(K8sError):
             self.create()
         self.assertEqual(self.kube.objects, {})
-        self.assertEqual(len(self.kube.deleted), 3)
+        self.assertEqual(len(self.kube.deleted), 1)
 
     def test_per_user_limit(self):
         s = settings(OPENVRE_MAX_SESSIONS_PER_USER="1")
@@ -312,14 +312,12 @@ class CreateDeleteTests(unittest.TestCase):
         self.assertEqual(self.kube.objects, {})
         self.assertEqual(sessions.delete(self.kube, self.s, "openvre", spec.name), (False, []))
 
-    def test_delete_legacy_session(self):
-        """Sessions created by the pre-template scheduler have no openvre.io/session label."""
+    def test_delete_by_name_without_session_label(self):
+        """The Deployment and Service are also found by name (always the session name)."""
         name = "openvre-ix-rstudio-abc12345"
         lbl = {"openvre.io/interactive": "true", "app": name}
         for kind, path, oname in (("Deployment", DEP_PATH, name),
-                                  ("Service", "/api/v1/namespaces/openvre/services", name),
-                                  ("Ingress", "/apis/networking.k8s.io/v1/namespaces/openvre/ingresses", name),
-                                  ("ConfigMap", "/api/v1/namespaces/openvre/configmaps", name + "-proxy-hdr")):
+                                  ("Service", "/api/v1/namespaces/openvre/services", name)):
             self.kube.objects[f"{path}/{oname}"] = {"kind": kind, "metadata": {"name": oname, "labels": lbl}}
         found, errors = sessions.delete(self.kube, self.s, "openvre", name)
         self.assertEqual((found, errors), (True, []))

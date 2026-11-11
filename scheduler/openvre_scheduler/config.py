@@ -47,6 +47,8 @@ class Settings:
     listen_host: str = "0.0.0.0"
     listen_port: int = 8080
     auth_tokens: list = field(default_factory=list)
+    # Read-only token the gateway (Traefik) sends to GET /gateway/routes.
+    gateway_token: str = ""
     # User check: "off", "optional" (verify when sent) or "required".
     user_token: str = "off"
     oidc_issuer: str = ""
@@ -84,10 +86,8 @@ class Settings:
     allowed_pull_secrets: list = field(default_factory=list)
 
     # Interactive sessions
-    ingress_class: str = ""
     external_base: str = ""
     auth_url: str = ""
-    auth_signin: str = ""
     interactive_default_image: str = ""
     interactive_default_port: str = ""
     interactive_default_mount: str = ""
@@ -137,6 +137,7 @@ def load(env=None):
     # Several comma-separated tokens are accepted so a token can be rotated
     # without downtime: add the new one, roll the frontend, remove the old one.
     s.auth_tokens = _list(env, "SCHEDULER_AUTH_TOKEN")
+    s.gateway_token = _str(env, "OPENVRE_GATEWAY_TOKEN")
     s.user_token = (_str(env, "OPENVRE_USER_TOKEN", "off") or "off").lower()
     s.oidc_issuer = _str(env, "OPENVRE_OIDC_ISSUER").rstrip("/")
     s.oidc_jwks_url = _str(env, "OPENVRE_OIDC_JWKS_URL") or (s.oidc_issuer + "/protocol/openid-connect/certs" if s.oidc_issuer else "")
@@ -170,10 +171,8 @@ def load(env=None):
     s.image_pull_secrets = _list(env, "OPENVRE_IMAGE_PULL_SECRETS")
     s.allowed_pull_secrets = sorted(set(s.image_pull_secrets + _list(env, "OPENVRE_ALLOWED_PULL_SECRETS")))
 
-    s.ingress_class = _str(env, "OPENVRE_INGRESS_CLASS")
     s.external_base = _str(env, "OPENVRE_EXTERNAL_BASE").rstrip("/")
     s.auth_url = _str(env, "OPENVRE_INTERACTIVE_AUTH_URL")
-    s.auth_signin = _str(env, "OPENVRE_INTERACTIVE_AUTH_SIGNIN")
     s.interactive_default_image = _str(env, "OPENVRE_INTERACTIVE_DEFAULT_IMAGE")
     s.interactive_default_port = _str(env, "OPENVRE_INTERACTIVE_DEFAULT_PORT")
     s.interactive_default_mount = _str(env, "OPENVRE_INTERACTIVE_DEFAULT_MOUNT")
@@ -228,6 +227,10 @@ def check(s):
         if len(t) < 16:
             problems.append("SCHEDULER_AUTH_TOKEN values must be at least 16 characters")
             break
+    if len(s.gateway_token) < 16:
+        problems.append("OPENVRE_GATEWAY_TOKEN must be set (at least 16 characters): the gateway reads session routes with it")
+    elif s.gateway_token in s.auth_tokens:
+        problems.append("OPENVRE_GATEWAY_TOKEN must differ from SCHEDULER_AUTH_TOKEN")
     if s.default_namespace not in s.allowed_namespaces:
         problems.append("DEFAULT_NAMESPACE must be listed in OPENVRE_ALLOWED_NAMESPACES")
     if s.audit_enabled and not s.audit_image:

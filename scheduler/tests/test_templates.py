@@ -294,7 +294,7 @@ class SessionTemplateLoadTests(unittest.TestCase):
     def test_describe(self):
         tpls = templates.load_dir(TEMPLATE_DIR)
         web = tpls["openvre-web-session"].describe()
-        self.assertEqual(web["objects"], ["ConfigMap", "Deployment", "Service", "Ingress"])
+        self.assertEqual(web["objects"], ["Deployment", "Service"])
         self.assertEqual(web["access"], {"type": "web"})
         self.assertEqual(tpls["openvre-desktop-session"].describe()["access"], {"type": "guacamole"})
 

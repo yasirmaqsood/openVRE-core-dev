@@ -10,14 +10,15 @@ from openvre_scheduler import config  # noqa: E402
 from openvre_scheduler.k8s import K8sError  # noqa: E402
 
 TOKEN = "test-token-0123456789abcdef"
+GATEWAY_TOKEN = "gateway-token-0123456789abcdef"
 
 BASE_ENV = {
     "SCHEDULER_AUTH_TOKEN": TOKEN,
+    "OPENVRE_GATEWAY_TOKEN": GATEWAY_TOKEN,
     "DEFAULT_NAMESPACE": "openvre",
     "DEFAULT_SHARED_PVC": "shared-pvc",
     "DEFAULT_USERDATA_PVC": "shared-pvc",
     "DEFAULT_ADMINDATA_PVC": "admin-pvc",
-    "OPENVRE_INGRESS_CLASS": "nginx",
     "OPENVRE_EXTERNAL_BASE": "https://vre.example.org",
     "OPENVRE_INTERACTIVE_DEFAULT_PORT": "8787",
     "OPENVRE_INTERACTIVE_DEFAULT_MOUNT": "/workspace",

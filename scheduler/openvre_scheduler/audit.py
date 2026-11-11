@@ -138,7 +138,7 @@ def collect(kube, ns, name, tail_lines=200):
     pods = kube.list(f"/api/v1/namespaces/{q(ns)}/pods", f"app={name}")
     dep = kube.get(f"/apis/apps/v1/namespaces/{q(ns)}/deployments/{q(name)}")
     # Every object named after the session: Deployment, ReplicaSets (quota or policy
-    # rejections show up there, when no pod exists), pods, Service, Ingress, ConfigMap.
+    # rejections show up there, when no pod exists), pods, Service, ConfigMap.
     events = [e for e in kube.list(f"/api/v1/namespaces/{q(ns)}/events")
               if str((e.get("involvedObject") or {}).get("name", "")).startswith(name)]
     events.sort(key=lambda e: e.get("lastTimestamp") or e.get("eventTime") or "")

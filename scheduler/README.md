@@ -3,7 +3,7 @@
 A small HTTP API between the OpenVRE frontend and Kubernetes. The frontend asks it to create, check and delete:
 
 - **batch Jobs** (tool runs, launcher `kubernetes_native`)
-- **interactive sessions** (RStudio, Stata, Guacamole desktops): a Deployment, a Service, and for web tools an Ingress plus a ConfigMap of proxy headers
+- **interactive sessions** (RStudio, Stata, Guacamole desktops): a Deployment and a Service. Web tools are reached through the OpenVRE gateway (Traefik), which reads their routes from `GET /gateway/routes`; the scheduler creates no Ingress
 
 The scheduler holds the Kubernetes credentials, so the frontend never needs any. It is stateless: Kubernetes is the only record of what runs.
 
@@ -30,6 +30,7 @@ browser → frontend (PHP, ProcessK8s.php) ──HTTP + JSON, Bearer token──
 | `openvre_scheduler/jobs.py` | Batch Job create / status / delete |
 | `openvre_scheduler/sessions.py` | Interactive session request checks, create / status / delete / expiry |
 | `openvre_scheduler/manifests.py` | Session building blocks (`{{ session.* }}`) and node placement helpers |
+| `openvre_scheduler/gateway.py` | Session routes for the gateway (Traefik dynamic configuration) |
 | `openvre_scheduler/audit.py` | Admin-only audit files for sessions |
 | `openvre_scheduler/k8s.py` | Minimal Kubernetes API client |
 | `audit-sidecar/` | Separate image: the audit sidecar that runs inside session pods |
@@ -71,6 +72,7 @@ Every route also works under `/v1/...`. Every response is JSON with `"ok": true|
 | POST | `/interactive-sessions` | yes | Create a session: `{"namespace", "template", "context": {...}, "params": {...}}`. Returns `name`, `access`, `access_url`, `path_prefix`, `expires_at`. |
 | GET | `/interactive-sessions/<name>?namespace=` | yes | `{"exists", "state": "Running|Pending|Failed", "reason"}` |
 | DELETE | `/interactive-sessions/<name>?namespace=` | yes | Delete a session. Already gone is still `ok`. |
+| GET | `/gateway/routes` | gateway token | Traefik dynamic configuration for every web session (see [Gateway routes](#gateway-routes)). Header `X-OpenVRE-Gateway-Token`; the frontend's token is not accepted. |
 
 Status codes:
 
@@ -156,7 +158,7 @@ The caller only ever sends values. The image registry rules, user and group, vol
 | Template | Kind | Used by | What it creates |
 |---|---|---|---|
 | `openvre-batch-job` | Job | Every `kubernetes_native` tool run | A Job: the tool image runs the submission script the frontend wrote into the run folder |
-| `openvre-web-session` | InteractiveSession | Browser tools: RStudio, Jupyter, VS Code, Stata web, ... | ConfigMap (proxy headers), Deployment, Service, Ingress at `/interactive-tool/<session>/` |
+| `openvre-web-session` | InteractiveSession | Browser tools: RStudio, Jupyter, VS Code, Stata web, ... | Deployment, Service; the gateway serves it at `/interactive-tool/<session>/` |
 | `openvre-desktop-session` | InteractiveSession | Desktop tools through Guacamole (VNC or RDP) | Deployment, Service; access through Guacamole |
 
 Session template parameters (`web` / `desktop`):
@@ -290,7 +292,7 @@ kind: InteractiveSession
 access:                            # how users reach the session
   type: web                        # web, or guacamole (then also protocol: "{{ protocol }}")
 parameters: {...}                  # must declare port (int)
-objects:                           # ConfigMap, Deployment, Service, Ingress, in creation order
+objects:                           # ConfigMap, Deployment, Service, in creation order
   - apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -313,18 +315,15 @@ objects:                           # ConfigMap, Deployment, Service, Ingress, in
 | `session.readiness_probe` | mapping | TCP on `port`, or HTTP on `readiness_path` |
 | `session.command` | list or empty | `["sh", "-lc", executable]`; empty (key left out) when there is no executable |
 | `session.pull_secrets` | list | `OPENVRE_IMAGE_PULL_SECRETS` plus the `image_pull_secrets` parameter |
-| `session.proxy_headers` | mapping | Data for the `<session>-proxy-hdr` ConfigMap |
-| `session.ingress_host` | text or empty | Host from `OPENVRE_EXTERNAL_BASE`; empty leaves `host` out |
-| `session.ingress_path` | text | `<path>(/|$)(.*)` (pairs with the rewrite annotation) |
-| `session.ingress_annotations` | mapping | nginx timeouts, rewrite, priority, auth-url/signin, redirects |
+| `session.gateway_annotations` | mapping | For the web session's Service: the gateway path and the request headers (`X-Forwarded-Proto`, prefix headers from `proxy_root_mode` / `proxy_headers`). The policy sets them on the session Service anyway. |
 
-Session templates can also read `{{ config.userdata_pvc }}`, `{{ config.ingress_class }}` and `{{ config.affinity }}`, besides the `config.*` values listed above.
+Session templates can also read `{{ config.userdata_pvc }}` and `{{ config.affinity }}`, besides the `config.*` values listed above.
 
 **Parameters with a fixed meaning.** The building blocks read these names, so if a session template declares them they must have this type: `port` (int, required), `image` (image), `cpu`, `memory` (quantity, capped by the session limits), `executable`, `readiness_path`, `proxy_root_mode`, `proxy_root_header` (string), `proxy_headers` (headers), `image_pull_secrets` (pull_secrets).
 
-**Fixed names.** The user data volume must be named `userdata` (`session.mounts` refers to it), and the proxy header ConfigMap `<session>-proxy-hdr` (the scheduler links the Ingress to it).
+**Fixed names.** The user data volume must be named `userdata` (`session.mounts` refers to it). A web session needs a Service named `{{ session.name }}`: the gateway routes to it.
 
-**Extra startup checks for session templates:** objects only of the four allowed kinds; exactly one Deployment named `{{ session.name }}`; every other object named `{{ session.name }}` or `{{ session.name }}-suffix`; `port` declared; a valid `access` block; `{{ session.* }}` only with known names, and only in session templates.
+**Extra startup checks for session templates:** objects only of the three allowed kinds; exactly one Deployment named `{{ session.name }}`; every other object named `{{ session.name }}` or `{{ session.name }}-suffix`; `port` declared; a valid `access` block; `{{ session.* }}` only with known names, and only in session templates.
 
 ### Adding a new tool
 
@@ -388,10 +387,9 @@ Allowing a registry namespace means trusting everyone who can push to it. Keep p
 
 Session templates can grow over time, so every filled-in session is checked before anything is created. Rejected sessions return 422 with every reason.
 
-- Only ConfigMap, Deployment, Service and Ingress; every object named after the session.
+- Only ConfigMap, Deployment and Service (no Ingress: the gateway routes web sessions); every object named after the session. A web session must have a Service named after the session.
 - Deployment: `replicas` forced to 1, selector forced to the session; no `hostNetwork`, `hostPID`, `hostIPC`, `serviceAccountName`, `nodeName`, `runtimeClassName`, ...; volumes only allowed PVCs, `emptyDir`, or the session's own ConfigMaps (no `secret`, `projected`, `hostPath`, ...); the admin volume only in the audit sidecar; with a single shared PVC, tool containers must mount a sub-folder outside the audit folder; containers and init containers: no `privileged`, no added capabilities, no `hostPort`, no `envFrom` or Secret-reading env, images through the allowlist (the configured audit image is exempt); `automountServiceAccountToken` and `enableServiceLinks` forced off.
-- Service: `ClusterIP` only, no `nodePort`, selector forced to the session.
-- Ingress: no `*snippet*` annotations (they run raw nginx config), no `tls` or `defaultBackend`, backends must be the session Service; class, host and the scheduler's annotations (auth, redirects, proxy headers) are forced.
+- Service: `ClusterIP` only, no `nodePort`, selector forced to the session. The `openvre.io/gateway-*` annotations are forced: set from the scheduler's values on a web session's Service, removed everywhere else (desktop sessions are only reachable through Guacamole).
 - ConfigMap: string data only.
 - Every object gets the session labels and the request namespace.
 
@@ -414,7 +412,7 @@ A rejected Job returns 422 with every reason in `error`.
 
 ## Interactive sessions
 
-Each session is named `openvre-ix-<tool>-<12 random hex>` and served at `/interactive-tool/<tool>-<hex>/`. The frontend Apache rule maps that path back to the Service `openvre-ix-<tool>-<hex>`. What objects a session has comes from its template; the shipped templates give pods:
+Each session is named `openvre-ix-<tool>-<12 random hex>` and served at `/interactive-tool/<tool>-<hex>/`, through the gateway (see [Gateway routes](#gateway-routes)). What objects a session has comes from its template; the shipped templates give pods:
 
 - `automountServiceAccountToken: false`, `enableServiceLinks: false` (forced by the policy for any template)
 - a readiness probe (TCP on the port, or HTTP `readiness_path`), so `Running` means the app answers
@@ -425,11 +423,21 @@ Each session is named `openvre-ix-<tool>-<12 random hex>` and served at `/intera
 
 **Status.** Read from the Deployment named after the session. `state` is `Failed` when a container waits with `ImagePullBackOff`, `ErrImagePull`, `CrashLoopBackOff` or a container config error; `reason` says which. The frontend shows that as `ERROR`.
 
-**Delete.** Finds every object with the label `openvre.io/session=<name>`, plus the fixed names older sessions used, and deletes those carrying `openvre.io/interactive`. Objects without that label are never touched.
+**Delete.** Finds every object with the label `openvre.io/session=<name>`, plus the Deployment and Service by name, and deletes those carrying `openvre.io/interactive` (Service first, so the gateway drops the route before the pod goes). Objects without that label are never touched.
 
 **Expiry.** With `OPENVRE_SESSION_TTL_HOURS` > 0, every session gets `openvre.io/expires-at`, and a background loop (every `OPENVRE_REAPER_INTERVAL_SEC`) deletes expired sessions. Sessions created before the TTL was set have no expiry and are left alone.
 
 **Per-user limit.** With `OPENVRE_MAX_SESSIONS_PER_USER` > 0, a new session for a user who already has that many returns 429. Counted from the `openvre.io/user` label, so sessions created before this version are not counted.
+
+### Gateway routes
+
+Web sessions are not given an Ingress. The OpenVRE gateway (Traefik, deployed by the Helm chart behind the one Ingress of the project) routes `/interactive-tool/<session>/` to the session's Service:
+
+1. A web session's Service carries `openvre.io/gateway-path` (`/interactive-tool/<tool>-<hex>`) and `openvre.io/gateway-headers` (JSON request headers).
+2. Traefik's HTTP provider polls `GET /gateway/routes` every few seconds with `X-OpenVRE-Gateway-Token`.
+3. The scheduler lists the Services labelled `openvre.io/interactive=true` and managed by it, and answers with Traefik's dynamic configuration: per session a router (`PathPrefix`, priority above the fixed routes), a `stripPrefix` middleware (the tool sees `/`; Traefik adds `X-Forwarded-Prefix`), a `headers` middleware, a `forwardAuth` middleware when `OPENVRE_INTERACTIVE_AUTH_URL` is set, and the service URL `http://<service>.<namespace>.svc:<port>`.
+
+Nothing is kept in memory (the answer is cached about 2 s, and cleared when a session is created or deleted), so a restart of the scheduler or of Traefik loses no route. A deleted session's route disappears at the next poll.
 
 ### Audit record
 
@@ -487,9 +495,9 @@ Read once at startup. The scheduler refuses to start (exit code 2, a `CRITICAL` 
 | `OPENVRE_IMAGE_ALLOWLIST` | | Comma list of single images: `repo` (any tag), `repo:tag`, `repo@sha256:...`. For images outside the allowed registries. |
 | `OPENVRE_IMAGE_PULL_SECRETS` | | Secrets added to every Job and session pod |
 | `OPENVRE_ALLOWED_PULL_SECRETS` | | Further secrets a tool may ask for (`infrastructure.image_pull_secrets`) |
-| `OPENVRE_INGRESS_CLASS` | | Ingress class for web sessions (required unless all sessions are Guacamole) |
-| `OPENVRE_EXTERNAL_BASE` | | Public URL (`https://host`); sets the Ingress host and redirects |
-| `OPENVRE_INTERACTIVE_AUTH_URL` / `_SIGNIN` | | nginx `auth-url` / `auth-signin` for session Ingresses |
+| `OPENVRE_GATEWAY_TOKEN` | | **Required**, at least 16 characters, different from `SCHEDULER_AUTH_TOKEN`. The gateway sends it to `GET /gateway/routes`. |
+| `OPENVRE_EXTERNAL_BASE` | | Public URL (`https://host`); its scheme sets `X-Forwarded-Proto` for sessions |
+| `OPENVRE_INTERACTIVE_AUTH_URL` | | Login check in front of web sessions (Traefik `forwardAuth`): every request is first sent there; 2xx lets it through, anything else (e.g. a redirect to login) goes back to the browser |
 | `OPENVRE_INTERACTIVE_DEFAULT_IMAGE` / `_PORT` / `_MOUNT` | | Defaults for session requests |
 | `OPENVRE_MAX_SESSION_CPU` / `_MEMORY` | | Upper limits for one session (e.g. `4`, `16Gi`) |
 | `OPENVRE_SESSION_TTL_HOURS` | `0` (off) | Delete sessions this many hours after creation |

@@ -47,7 +47,7 @@ PARAM_KEYS = {"type", "description", "required", "default", "max_length", "enum"
 
 # {{ config.* }}: name -> "text" (usable inside text), "list" (spreadable) or "any" (whole value only)
 CONFIG_REFS = {
-    "shared_pvc": "text", "shared_data_prefix": "text", "userdata_pvc": "text", "ingress_class": "text",
+    "shared_pvc": "text", "shared_data_prefix": "text", "userdata_pvc": "text",
     "run_as_uid": "text", "run_as_gid": "text",
     "node_selector": "any", "affinity": "any", "tolerations": "list",
 }
@@ -55,9 +55,8 @@ CONFIG_REFS = {
 # {{ session.* }}: computed per session by sessions.building_blocks()
 SESSION_REFS = {
     "name": "text", "path": "text", "url": "text", "namespace": "text", "user_id": "text",
-    "ingress_path": "text",
     "labels": "any", "pod_labels": "any", "annotations": "any", "readiness_probe": "any",
-    "command": "any", "proxy_headers": "any", "ingress_host": "any", "ingress_annotations": "any",
+    "command": "any", "gateway_annotations": "any",
     "mounts": "list", "audit_containers": "list", "audit_volumes": "list", "pull_secrets": "list",
 }
 
@@ -70,7 +69,7 @@ SESSION_RESERVED = {
     "memory": "quantity",           # capped by OPENVRE_MAX_SESSION_MEMORY
     "executable": "string",         # -> session.command
     "readiness_path": "string",     # -> session.readiness_probe (HTTP instead of TCP)
-    "proxy_root_mode": "string",    # -> session.proxy_headers
+    "proxy_root_mode": "string",    # -> session.gateway_annotations (request headers)
     "proxy_root_header": "string",
     "proxy_headers": "headers",
     "image_pull_secrets": "pull_secrets",  # -> session.pull_secrets
@@ -83,7 +82,6 @@ SESSION_OBJECT_KINDS = {
     "ConfigMap": "v1",
     "Deployment": "apps/v1",
     "Service": "v1",
-    "Ingress": "networking.k8s.io/v1",
 }
 ACCESS_TYPES = {"web", "guacamole"}
 
@@ -233,7 +231,6 @@ def config_values(settings):
         "shared_pvc": settings.shared_pvc,
         "shared_data_prefix": settings.shared_data_prefix,
         "userdata_pvc": settings.userdata_pvc,
-        "ingress_class": settings.ingress_class,
         "run_as_uid": settings.job_run_as_uid,
         "run_as_gid": settings.job_run_as_gid,
         "node_selector": manifests.parse_node_selector(settings.node_selector),
@@ -458,10 +455,6 @@ class SessionTemplate(_Base):
         self.check_placeholders(self.objects, "objects", used)
         self.check_placeholders(self.access, "access", used)
         self.check_unused(used, SESSION_IMPLICIT)
-
-    @property
-    def has_ingress(self):
-        return any(o["kind"] == "Ingress" for o in self.objects)
 
     def describe(self):
         out = super().describe()

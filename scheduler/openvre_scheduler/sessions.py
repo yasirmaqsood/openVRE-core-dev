@@ -86,9 +86,6 @@ def parse_request(body, settings, templates):
             "read_only": bool(vm.get("read_only") or vm.get("readOnly")),
         })
 
-    if tpl.has_ingress:
-        v.require(settings.ingress_class, "OPENVRE_INGRESS_CLASS is not set on the scheduler", 500)
-
     # The scheduler picks the name. The frontend's session_id is kept as metadata only,
     # so two requests can never land on the same objects.
     name = f"{v.SESSION_PREFIX}{v.segment(tool_id or tool_name, 16, 'tool')}-{os.urandom(6).hex()}"
@@ -199,14 +196,13 @@ def status(kube, ns, name):
 
 
 def _session_objects(kube, ns, name):
-    """(kind, name, object) for every object of a session: found by the session
-    label (template sessions), plus the fixed names older sessions used."""
+    """(kind, name, object) for every object of a session, found by the session
+    label, plus the Deployment and Service by name (always named after the session)."""
     found = {}
     for kind, base in mf.API_PATHS.items():
         for obj in kube.list(base.format(ns=q(ns)), f"{mf.SESSION_LABEL}={name}"):
             found[(kind, obj["metadata"]["name"])] = obj
-    for kind, obj_name in (("Ingress", name), ("Service", name), ("Deployment", name),
-                           ("ConfigMap", name + mf.PROXY_HEADERS_SUFFIX)):
+    for kind, obj_name in (("Service", name), ("Deployment", name)):
         if (kind, obj_name) not in found:
             obj = kube.get(_object_path(kind, ns, obj_name))
             if obj is not None:
@@ -229,8 +225,8 @@ def delete(kube, settings, ns, name, reason="delete"):
             # Final state, events and logs, before the objects (and their logs) disappear.
             audit.safe(audit.snapshot_delete, kube, settings, audit_dir, ns, name, reason)
     found = False
-    # Ingress first so traffic stops before the backend disappears.
-    order = {"Ingress": 0, "Service": 1, "Deployment": 2, "ConfigMap": 3}
+    # Service first: the gateway drops the route before the backend disappears.
+    order = {"Service": 0, "Deployment": 1, "ConfigMap": 2}
     for (kind, obj_name), obj in sorted(objs.items(), key=lambda kv: order[kv[0][0]]):
         if not _is_managed(obj):
             log.warning("refusing to delete unmanaged object", extra={"kind": kind, "name": obj_name})
