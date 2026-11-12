@@ -30,6 +30,8 @@ TEMPLATE_VERSION_ANNOTATION = "openvre.io/template-version"
 # adding these request headers (scheduler /gateway/routes reads them back).
 GATEWAY_PATH_ANNOTATION = "openvre.io/gateway-path"
 GATEWAY_HEADERS_ANNOTATION = "openvre.io/gateway-headers"
+# On the session Deployment: the kinds the session created, so a stop only looks those up.
+KINDS_ANNOTATION = "openvre.io/kinds"
 
 # RStudio writes lots of session metadata under home; keep user files, drop internals.
 DEFAULT_AUDIT_EXCLUDE_PREFIXES = ",".join([
