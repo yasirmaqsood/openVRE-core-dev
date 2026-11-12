@@ -37,21 +37,24 @@ class FakeKube:
         self.objects = {}
         self.fail_create_kind = None
         self.unreachable = False
+        self.forbidden = ()  # path parts the "Role" does not allow, e.g. ("/ingresses",)
         self.created = []
         self.deleted = []
         self.logs = {}  # "pod/container" -> text
 
-    def _check(self):
+    def _check(self, path=""):
         if self.unreachable:
             raise K8sError(0, "Kubernetes API unreachable: test")
+        if any(part in path for part in self.forbidden):
+            raise K8sError(403, f"forbidden: {path}", "Forbidden")
 
     def get(self, path, query=None, accept="application/json"):
-        self._check()
+        self._check(path)
         obj = self.objects.get(path)
         return copy.deepcopy(obj) if obj is not None else None
 
     def create(self, path, obj):
-        self._check()
+        self._check(path)
         if self.fail_create_kind and obj.get("kind") == self.fail_create_kind:
             raise K8sError(422, f"{obj['kind']} is invalid", "Invalid")
         full = f"{path}/{obj['metadata']['name']}"
@@ -62,12 +65,12 @@ class FakeKube:
         return copy.deepcopy(obj)
 
     def delete(self, path, body=None):
-        self._check()
+        self._check(path)
         self.deleted.append(path)
         return self.objects.pop(path, None) is not None
 
     def list(self, path, label_selector=None):
-        self._check()
+        self._check(path)
         wanted = {}
         for part in (label_selector or "").split(","):
             if "=" in part:

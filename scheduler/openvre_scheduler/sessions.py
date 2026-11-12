@@ -119,6 +119,10 @@ def build(tpl, spec, values, settings):
     objects, errors = policy.check_session_objects(objects, spec, blocks, settings, log)
     if errors:
         raise v.ValidationError(f"session rejected by policy ({tpl.name}): " + "; ".join(errors), 422)
+    kinds = ",".join(k for k in mf.API_PATHS if any(o["kind"] == k for o in objects))
+    for obj in objects:
+        if obj["kind"] == "Deployment" and obj["metadata"]["name"] == spec.name:
+            obj["metadata"].setdefault("annotations", {})[mf.KINDS_ANNOTATION] = kinds
     if access["type"] == "guacamole":
         access = {"type": "guacamole", "host": spec.name, "port": spec.port,
                   "protocol": str(access.get("protocol", "vnc"))}
@@ -199,12 +203,21 @@ def status(kube, ns, name):
 
 
 def _session_objects(kube, ns, name):
-    """(kind, name, object) for every object of a session: found by the session
-    label (template sessions), plus the fixed names older sessions used."""
+    """(kind, name, object) for every object of a session, found by the session label.
+    Only the kinds recorded on its Deployment are looked up, so stopping a desktop
+    session needs no rights on ConfigMaps or Ingresses. Sessions without that record
+    (older schedulers) get every kind, plus the fixed names they used."""
+    dep = kube.get(_object_path("Deployment", ns, name))
+    recorded = ((dep or {}).get("metadata", {}).get("annotations") or {}).get(mf.KINDS_ANNOTATION, "")
+    kinds = [k for k in mf.API_PATHS if k in recorded.split(",")] if recorded else list(mf.API_PATHS)
     found = {}
-    for kind, base in mf.API_PATHS.items():
-        for obj in kube.list(base.format(ns=q(ns)), f"{mf.SESSION_LABEL}={name}"):
+    for kind in kinds:
+        for obj in kube.list(mf.API_PATHS[kind].format(ns=q(ns)), f"{mf.SESSION_LABEL}={name}"):
             found[(kind, obj["metadata"]["name"])] = obj
+    if dep is not None:
+        found[("Deployment", name)] = dep
+    if recorded:
+        return found
     for kind, obj_name in (("Ingress", name), ("Service", name), ("Deployment", name),
                            ("ConfigMap", name + mf.PROXY_HEADERS_SUFFIX)):
         if (kind, obj_name) not in found:

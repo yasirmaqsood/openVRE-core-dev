@@ -26,6 +26,8 @@ CREATED_ANNOTATION = "openvre.io/created-at"
 EXPIRES_ANNOTATION = "openvre.io/expires-at"
 AUDIT_ANNOTATION = "openvre.io/audit-host-path"
 TEMPLATE_VERSION_ANNOTATION = "openvre.io/template-version"
+# On the session Deployment: the kinds the session created, so a stop only looks those up.
+KINDS_ANNOTATION = "openvre.io/kinds"
 PROXY_HEADERS_SUFFIX = "-proxy-hdr"
 
 # RStudio writes lots of session metadata under home; keep user files, drop internals.

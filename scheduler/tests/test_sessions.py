@@ -325,6 +325,23 @@ class CreateDeleteTests(unittest.TestCase):
         self.assertEqual((found, errors), (True, []))
         self.assertEqual(self.kube.objects, {})
 
+    def test_delete_records_kinds(self):
+        """A web session records all its kinds; the stop deletes exactly those."""
+        spec = self.create()
+        dep = self.kube.objects[f"{DEP_PATH}/{spec.name}"]
+        self.assertEqual(dep["metadata"]["annotations"][mf.KINDS_ANNOTATION], "ConfigMap,Deployment,Service,Ingress")
+        self.assertEqual(sessions.delete(self.kube, self.s, "openvre", spec.name), (True, []))
+        self.assertEqual(self.kube.objects, {})
+
+    def test_delete_desktop_without_configmap_or_ingress_rights(self):
+        """EUCAIM's Role: no ConfigMaps or Ingresses. Desktop sessions still stop."""
+        spec = self.create(desktop_body())
+        dep = self.kube.objects[f"{DEP_PATH}/{spec.name}"]
+        self.assertEqual(dep["metadata"]["annotations"][mf.KINDS_ANNOTATION], "Deployment,Service")
+        self.kube.forbidden = ("/configmaps", "/ingresses")
+        self.assertEqual(sessions.delete(self.kube, self.s, "openvre", spec.name), (True, []))
+        self.assertEqual(self.kube.objects, {})
+
     def test_delete_refuses_unmanaged(self):
         name = "openvre-ix-not-ours"
         self.kube.objects[f"{DEP_PATH}/{name}"] = {"metadata": {"name": name, "labels": {"app": name}}}
