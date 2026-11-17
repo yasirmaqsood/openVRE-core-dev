@@ -7,7 +7,7 @@ import os
 import threading
 import unittest
 
-from helpers import GATEWAY_TOKEN, TOKEN, FakeKube, desktop_body, session_body, settings
+from helpers import GATEWAY_TOKEN, TOKEN, FakeKube, session_body, settings
 
 from openvre_scheduler import gateway, server, sessions, templates
 from openvre_scheduler import manifests as mf
@@ -72,10 +72,6 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(set(gateway.build(self.kube, self.s)["http"]["routers"]), {a.name, b.name})
         sessions.delete(self.kube, self.s, "openvre", a.name)
         self.assertEqual(set(gateway.build(self.kube, self.s)["http"]["routers"]), {b.name})
-
-    def test_desktop_sessions_not_routed(self):
-        start(self.kube, self.s, desktop_body())
-        self.assertEqual(gateway.build(self.kube, self.s), {})
 
     def test_other_services_ignored(self):
         # Interactive label but not made by the scheduler, or made by it without a gateway path.
@@ -150,7 +146,7 @@ class ConfigTests(unittest.TestCase):
 
 
 class NoGatewayTests(unittest.TestCase):
-    """A site without the gateway (OPENVRE_GATEWAY_TOKEN empty): desktops and Jobs only."""
+    """A site without the gateway (OPENVRE_GATEWAY_TOKEN empty): batch Jobs only."""
 
     def setUp(self):
         self.s = settings(OPENVRE_GATEWAY_TOKEN="")
@@ -162,11 +158,6 @@ class NoGatewayTests(unittest.TestCase):
         self.assertEqual(cm.exception.status, 409)
         self.assertIn("web tools are not enabled", cm.exception.message)
         self.assertEqual(self.kube.created, [])
-
-    def test_desktop_session_works(self):
-        spec = start(self.kube, self.s, desktop_body())
-        kinds = sorted(o["kind"] for o in self.kube.objects.values() if o["metadata"]["name"] == spec.name)
-        self.assertEqual(kinds, ["Deployment", "Service"])
 
     def test_routes_endpoint_off(self):
         self.s.listen_host, self.s.listen_port = "127.0.0.1", 0

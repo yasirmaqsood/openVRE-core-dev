@@ -116,8 +116,7 @@ function checkStatus($pid)
 
 /**
  * Status of a Kubernetes session, read live from the scheduler. Its URL was
- * saved when it started: a gateway path for web tools, a Guacamole link for
- * desktop tools.
+ * saved when it started: its path under /interactive-tool/ (gateway).
  */
 function checkStatusK8s($pid, $job)
 {

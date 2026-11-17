@@ -1586,7 +1586,7 @@ class Tooljob
 		$this->job_type = "interactive";
 		$this->launcher = "kubernetes_interactive";
 		$this->pid = $session->getPid();
-		// The session's own URL: a gateway path for web tools, a Guacamole link for desktops.
+		// The session's own URL: its path under /interactive-tool/ (gateway).
 		$this->access_path = $session->getAccessUrl();
 		$this->containerName = $this->pid;
 

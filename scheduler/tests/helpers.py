@@ -170,7 +170,3 @@ def session_body(template="openvre-web-session", context=None, params=None, **ct
         params = {"image": "ghcr.io/inab/k8-tool-rstudio:1.0", "port": 8787, "cpu": "1", "memory": "2Gi"}
     return {"namespace": "openvre", "template": template, "context": ctx, "params": params}
 
-
-def desktop_body(**ctx_overrides):
-    return session_body("openvre-desktop-session",
-                        params={"image": "ghcr.io/inab/desktop:1.0", "port": 5901, "protocol": "vnc"}, **ctx_overrides)

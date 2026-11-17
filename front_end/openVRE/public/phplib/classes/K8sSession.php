@@ -8,10 +8,8 @@ use Monolog\Logger;
  * Kubernetes interactive sessions (launcher "kubernetes_interactive"):
  * start, status and stop through the scheduler.
  *
- * The scheduler answers how users reach a session, as its template declares:
- *   web:       a URL under /interactive-tool/ (through the gateway)
- *   guacamole: host, port and protocol; a Guacamole connection is created
- *              for the user and its link becomes the session URL
+ * Sessions are web tools: the scheduler answers with their URL under
+ * /interactive-tool/, served through the gateway.
  */
 class K8sSession
 {
@@ -58,28 +56,12 @@ class K8sSession
         }
 
         $access = is_array($data["access"] ?? null) ? $data["access"] : array();
-        if (($access["type"] ?? "") === "web") {
-            $this->accessUrl = (string)($access["url"] ?? "");
-            return true;
-        }
-        if (($access["type"] ?? "") !== "guacamole") {
+        if (($access["type"] ?? "") !== "web" || empty($access["url"])) {
             $this->stop($this->pid);
-            return $this->failed("scheduler returned an unknown access type");
+            return $this->failed("scheduler returned no web address for the session");
         }
-        try {
-            $this->accessUrl = (new GuacamoleConnections())->create(
-                self::guacamoleUsername(),
-                $this->pid,
-                // Service DNS name without the cluster domain (not always cluster.local).
-                $access["host"] . "." . $this->scheduler->namespace() . ".svc",
-                (int)($access["port"] ?? 0),
-                strtolower(trim((string)($access["protocol"] ?? ""))) ?: "vnc"
-            );
-            return true;
-        } catch (\Throwable $e) {
-            $this->stop($this->pid);
-            return $this->failed("Cannot create Guacamole connection: " . $e->getMessage());
-        }
+        $this->accessUrl = (string)$access["url"];
+        return true;
     }
 
     /**
@@ -112,17 +94,11 @@ class K8sSession
         return $info;
     }
 
-    /** Stops the session and removes its Guacamole connection, if any. */
+    /** Stops the session. */
     public function stop(string $pid): array
     {
         if ($pid === "") {
             return array(false, "No session id given");
-        }
-        try {
-            (new GuacamoleConnections())->delete($pid);
-        } catch (\Throwable $e) {
-            // Not fatal: the session itself must still be stopped.
-            $this->logger->warning("K8s session $pid: cannot delete Guacamole connection: " . $e->getMessage());
         }
         $response = $this->scheduler->request("DELETE", $this->scheduler->objectPath("interactive-sessions", $pid));
         if ($response["ok"] === true) {
@@ -150,11 +126,5 @@ class K8sSession
     {
         $this->error = $error;
         return false;
-    }
-
-    /** The Guacamole user name: the same claim Guacamole's OpenID login uses. */
-    private static function guacamoleUsername(): string
-    {
-        return (string)(($_SESSION['tokenInfo']['preferred_username'] ?? "") ?: ($_SESSION['User']['id'] ?? ""));
     }
 }

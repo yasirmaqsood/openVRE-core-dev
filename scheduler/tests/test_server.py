@@ -7,7 +7,7 @@ import os
 import threading
 import unittest
 
-from helpers import TOKEN, FakeKube, desktop_body, php_job_manifest, session_body, settings
+from helpers import TOKEN, FakeKube, php_job_manifest, session_body, settings
 
 from openvre_scheduler import server, templates
 
@@ -140,11 +140,6 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("working_dir", body["error"])
 
-    def test_desktop_session(self):
-        status, body, _ = self.call("POST", "/v1/interactive-sessions", desktop_body())
-        self.assertEqual(status, 201, body)
-        self.assertEqual(body["access"], {"type": "guacamole", "host": body["name"], "port": 5901, "protocol": "vnc"})
-
     def test_k8s_unreachable_is_503(self):
         self.kube.unreachable = True
         status, body, _ = self.call("GET", "/jobs/openvre-bj-x?namespace=openvre")
@@ -169,7 +164,7 @@ class ServerTests(unittest.TestCase):
         status, body, _ = self.call("GET", "/v1/templates")
         self.assertEqual(status, 200)
         self.assertEqual(sorted(t["name"] for t in body["templates"]),
-                         ["openvre-batch-job", "openvre-desktop-session", "openvre-web-session"])
+                         ["openvre-batch-job", "openvre-web-session"])
         status, body, _ = self.call("GET", "/v1/templates/openvre-batch-job")
         self.assertIn("workdir", body["template"]["parameters"])
         self.assertEqual(self.call("GET", "/v1/templates/nope")[0], 404)

@@ -256,7 +256,6 @@ def check_session_objects(objects, spec, blocks, settings, log=None):
             if spec.access_type == "web" and oname == name:
                 # The gateway routes the session path to this Service (scheduler /gateway/routes).
                 ann.update(blocks["gateway_annotations"])
-            # Desktop sessions are only reachable through Guacamole: never a gateway route.
             meta["annotations"] = ann
         elif kind == "ConfigMap":
             if obj.get("binaryData"):

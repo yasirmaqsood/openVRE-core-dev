@@ -1,10 +1,10 @@
 # Interactive web tool reached in the browser at /interactive-tool/<session>/
 # (RStudio, Jupyter, VS Code, Stata web, ...).
 #
-# Used for every interactive tool whose infrastructure.k8s.template is
-# "openvre-web-session", and for older tools without that field that are not
-# Guacamole desktops. A new web tool normally needs only a tool definition with
-# different parameters (image, port, env, ...), not a new template.
+# Used for every interactive tool: those whose infrastructure.k8s.template is
+# "openvre-web-session", and those described by their usual fields. A new web
+# tool normally needs only a tool definition with different parameters (image,
+# port, env, ...), not a new template.
 #
 # Objects: Deployment -> Service. The openvre-gateway (Traefik) routes
 # /interactive-tool/<session>/ to the Service; no Ingress is created per session.

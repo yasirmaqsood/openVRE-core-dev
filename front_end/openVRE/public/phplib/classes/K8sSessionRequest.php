@@ -9,7 +9,7 @@ namespace OpenVRE;
  * Template and parameters come from the tool's usual fields (container_image,
  * container_port, interactive_access, proxy, cpus, memory, ...); see
  * toolFieldsTemplate(). A tool can instead name a scheduler template directly:
- *   infrastructure.k8s.template  e.g. "openvre-web-session", "openvre-desktop-session"
+ *   infrastructure.k8s.template  e.g. "openvre-web-session"
  *   infrastructure.k8s.params    sent to the scheduler as they are (image, port, cpu, memory, env, ...)
  *
  * Nothing tool-specific is decided here: a new tool needs a tool definition,
@@ -18,7 +18,6 @@ namespace OpenVRE;
 class K8sSessionRequest
 {
     public const WEB_SESSION_TEMPLATE = 'openvre-web-session';
-    public const DESKTOP_SESSION_TEMPLATE = 'openvre-desktop-session';
 
     /**
      * The mount for one entry of infrastructure.volumes ("<folder in the
@@ -139,24 +138,22 @@ class K8sSessionRequest
     }
 
     /**
-     * Template and parameters from the tool's usual fields:
-     * interactive_access.mode "guacamole" -> desktop template, else web template.
+     * Template and parameters from the tool's usual fields (web template).
      */
     private static function toolFieldsTemplate(array $infra, $cpus, $memory): array
     {
         $access = is_array($infra['interactive_access'] ?? null) ? $infra['interactive_access'] : array();
-        $desktop = strtolower(trim((string)($access['mode'] ?? ''))) === 'guacamole';
+        if (strtolower(trim((string)($access['mode'] ?? ''))) === 'guacamole') {
+            throw new \InvalidArgumentException("Desktop (Guacamole) tools are not supported on Kubernetes");
+        }
 
         $image = (string)($infra['container_image'] ?? SchedulerClient::optionalEnv("OPENVRE_INTERACTIVE_DEFAULT_IMAGE"));
         if ($image === "") {
             throw new \InvalidArgumentException("Missing infrastructure.container_image for interactive tool");
         }
-        $port = (int)($desktop ? ($access['port'] ?? 0)
-            : ($infra['container_port'] ?? SchedulerClient::optionalEnv("OPENVRE_INTERACTIVE_DEFAULT_PORT", "0")));
+        $port = (int)($infra['container_port'] ?? SchedulerClient::optionalEnv("OPENVRE_INTERACTIVE_DEFAULT_PORT", "0"));
         if ($port <= 0) {
-            throw new \InvalidArgumentException($desktop
-                ? "Guacamole interactive tool is missing interactive_access.port"
-                : "Missing infrastructure.container_port (and OPENVRE_INTERACTIVE_DEFAULT_PORT unset)");
+            throw new \InvalidArgumentException("Missing infrastructure.container_port (and OPENVRE_INTERACTIVE_DEFAULT_PORT unset)");
         }
 
         $params = array(
@@ -174,10 +171,6 @@ class K8sSessionRequest
             $params["image_pull_secrets"] = array_values(array_map("strval", $infra['image_pull_secrets']));
         }
 
-        if ($desktop) {
-            $params["protocol"] = strtolower(trim((string)($access['protocol'] ?? ''))) ?: "vnc";
-            return array(self::DESKTOP_SESSION_TEMPLATE, $params);
-        }
         $proxy = is_array($infra['proxy'] ?? null) ? $infra['proxy'] : array();
         if (!empty($proxy['root_path_mode'])) {
             $params["proxy_root_mode"] = strtolower(trim((string)$proxy['root_path_mode']));

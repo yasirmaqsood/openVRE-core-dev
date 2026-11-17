@@ -3,7 +3,7 @@
 A small HTTP API between the OpenVRE frontend and Kubernetes. The frontend asks it to create, check and delete:
 
 - **batch Jobs** (tool runs, launcher `kubernetes_native`)
-- **interactive sessions** (RStudio, Stata, Guacamole desktops): a Deployment and a Service. Web tools are reached through the OpenVRE gateway (Traefik), which reads their routes from `GET /gateway/routes`; the scheduler creates no Ingress
+- **interactive sessions** (RStudio, Jupyter, ... in the browser): a Deployment and a Service. Web tools are reached through the OpenVRE gateway (Traefik), which reads their routes from `GET /gateway/routes`; the scheduler creates no Ingress
 
 The scheduler holds the Kubernetes credentials, so the frontend never needs any. It is stateless: Kubernetes is the only record of what runs.
 
@@ -25,7 +25,7 @@ browser → frontend (PHP, ProcessK8s.php / K8sSession.php) ──HTTP + JSON, B
 | `openvre_scheduler/validation.py` | Checks for every value coming from a request |
 | `openvre_scheduler/templates.py` | Loading, checking and filling the YAML workload templates |
 | `openvre_scheduler/policy.py` | What a filled-in Job or session may contain (checked after every template) |
-| `templates/` | The workload templates shipped in the image: `openvre-batch-job`, `openvre-web-session`, `openvre-desktop-session` |
+| `templates/` | The workload templates shipped in the image: `openvre-batch-job`, `openvre-web-session` |
 | `requirements.txt` | PyYAML, pinned |
 | `openvre_scheduler/jobs.py` | Batch Job create / status / delete |
 | `openvre_scheduler/sessions.py` | Interactive session request checks, create / status / delete / expiry |
@@ -129,11 +129,10 @@ Unknown context fields are rejected.
 
 **`params`**: the tool's own settings, checked against the parameters the template declares (`GET /v1/templates/<name>`). Unknown parameters are rejected.
 
-**Response `access`** tells the frontend how users reach the session, as declared by the template:
+**Response `access`** tells the frontend how users reach the session:
 
 ```json
 {"type": "web", "url": "/interactive-tool/rstudio-5f2c9a1b7e30/"}
-{"type": "guacamole", "host": "openvre-ix-stata-5f2c9a1b7e30", "port": 5901, "protocol": "vnc"}
 ```
 
 ## Templates
@@ -159,24 +158,22 @@ The caller only ever sends values. The image registry rules, user and group, vol
 |---|---|---|---|
 | `openvre-batch-job` | Job | Every `kubernetes_native` tool run | A Job: the tool image runs the submission script the frontend wrote into the run folder |
 | `openvre-web-session` | InteractiveSession | Browser tools: RStudio, Jupyter, VS Code, Stata web, ... | Deployment, Service; the gateway serves it at `/interactive-tool/<session>/` |
-| `openvre-desktop-session` | InteractiveSession | Desktop tools through Guacamole (VNC or RDP) | Deployment, Service; access through Guacamole |
 
-Session template parameters (`web` / `desktop`):
+`openvre-web-session` parameters:
 
 | Parameter | Type | Default | Notes |
 |---|---|---|---|
 | `image` | image | required | Checked against the allowed images (see [Allowed images](#allowed-images)) |
-| `port` | int | required | App port (web) or VNC/RDP port (desktop) |
+| `port` | int | required | The tool's HTTP port |
 | `cpu` | quantity | `"500m"` / `"1"`, max `"8"` | Request and limit; also capped by `OPENVRE_MAX_SESSION_CPU` |
 | `memory` | quantity | `"1536Mi"` / `"2Gi"`, max `"16Gi"` | Also capped by `OPENVRE_MAX_SESSION_MEMORY` |
 | `executable` | string | `""` | Start command (`sh -lc ...`); empty keeps the image's own |
 | `readiness_path` | string | `""` | HTTP path answering when ready; empty means a TCP check |
 | `env` | env | `{}` | Extra environment variables |
 | `image_pull_secrets` | pull_secrets | `[]` | Must be in `OPENVRE_ALLOWED_PULL_SECRETS` |
-| `proxy_root_mode` | string (web) | `""` | `x_forwarded_prefix`, `custom_header`, `none` |
-| `proxy_root_header` | string (web) | `""` | Header for `custom_header`, e.g. `X-RStudio-Root-Path` |
-| `proxy_headers` | headers (web) | `{}` | Extra request headers; `{{PATH_PREFIX}}` becomes the session path |
-| `protocol` | string (desktop) | `"vnc"` | `vnc` or `rdp` |
+| `proxy_root_mode` | string | `""` | `x_forwarded_prefix`, `custom_header`, `none` |
+| `proxy_root_header` | string | `""` | Header for `custom_header`, e.g. `X-RStudio-Root-Path` |
+| `proxy_headers` | headers | `{}` | Extra request headers; `{{PATH_PREFIX}}` becomes the session path |
 
 `openvre-batch-job` parameters (also visible at `GET /v1/templates/openvre-batch-job`):
 
@@ -290,7 +287,7 @@ name: openvre-web-session
 version: "1"                       # recorded on every session (annotation openvre.io/template-version)
 kind: InteractiveSession
 access:                            # how users reach the session
-  type: web                        # web, or guacamole (then also protocol: "{{ protocol }}")
+  type: web                        # the only access type: through the gateway
 parameters: {...}                  # must declare port (int)
 objects:                           # ConfigMap, Deployment, Service, in creation order
   - apiVersion: apps/v1
@@ -346,13 +343,13 @@ Most new tools need **no code change and no new template**: only a tool definiti
 }
 ```
 
-1. Pick the template by how users reach the tool: a browser app → `openvre-web-session`; a desktop over VNC/RDP → `openvre-desktop-session`.
+1. Browser tools use `openvre-web-session`.
 2. Put the tool's values in `params`. `GET /v1/templates/<name>` lists what each template accepts.
 3. If `OPENVRE_STRICT=1`, add the image to `OPENVRE_IMAGE_ALLOWLIST`; for a private registry, add its secret to `OPENVRE_ALLOWED_PULL_SECRETS`.
 
 Write a **new template** only when a tool needs a different *structure*: an extra container, an init container, a GPU node, another volume type, a different access method. Name it after the pattern (`gpu-web-session`), not the tool, so the next tool like it can reuse it. Put it in the template folder; the scheduler checks it at startup. A new Kubernetes object kind or access type needs a code change (policy and frontend).
 
-Tools without `infrastructure.k8s` use their usual fields (`container_image`, `container_port`, `interactive_access`, `proxy`, `executable`, ...): the frontend maps them to `openvre-web-session` or, with `interactive_access.mode: guacamole`, to `openvre-desktop-session`.
+Tools without `infrastructure.k8s` use their usual fields (`container_image`, `container_port`, `interactive_access`, `proxy`, `executable`, ...): the frontend maps them to `openvre-web-session`.
 
 ## Allowed images
 
@@ -389,7 +386,7 @@ Session templates can grow over time, so every filled-in session is checked befo
 
 - Only ConfigMap, Deployment and Service (no Ingress: the gateway routes web sessions); every object named after the session. A web session must have a Service named after the session.
 - Deployment: `replicas` forced to 1, selector forced to the session; no `hostNetwork`, `hostPID`, `hostIPC`, `serviceAccountName`, `nodeName`, `runtimeClassName`, ...; volumes only allowed PVCs, `emptyDir`, or the session's own ConfigMaps (no `secret`, `projected`, `hostPath`, ...); the admin volume only in the audit sidecar; with a single shared PVC, tool containers must mount a sub-folder outside the audit folder; containers and init containers: no `privileged`, no added capabilities, no `hostPort`, no `envFrom` or Secret-reading env, images through the allowlist (the configured audit image is exempt); `automountServiceAccountToken` and `enableServiceLinks` forced off.
-- Service: `ClusterIP` only, no `nodePort`, selector forced to the session. The `openvre.io/gateway-*` annotations are forced: set from the scheduler's values on a web session's Service, removed everywhere else (desktop sessions are only reachable through Guacamole).
+- Service: `ClusterIP` only, no `nodePort`, selector forced to the session. The `openvre.io/gateway-*` annotations are forced: set from the scheduler's values on a web session's Service, removed everywhere else.
 - ConfigMap: string data only.
 - Every object gets the session labels and the request namespace.
 
@@ -419,7 +416,7 @@ Each session is named `openvre-ix-<tool>-<12 random hex>` and served at `/intera
 - `strategy: Recreate`, so two copies never use the same workspace
 - labels `openvre.io/interactive`, `openvre.io/session`, `openvre.io/user`, `openvre.io/template`, `app.kubernetes.io/managed-by: openvre-scheduler`
 - annotations `openvre.io/session-id`, `openvre.io/user-id`, `openvre.io/created-at`, `openvre.io/template-version`, `openvre.io/expires-at` (with a TTL), `openvre.io/audit-host-path` (with audit)
-- the tool container keeps running as the image user (RStudio's init needs root); `fsGroup` is `OPENVRE_JOB_RUN_AS_GID`; no seccomp profile, because desktop apps in Guacamole sessions may need syscalls `RuntimeDefault` blocks
+- the tool container keeps running as the image user (RStudio's init needs root); `fsGroup` is `OPENVRE_JOB_RUN_AS_GID`; no seccomp profile is set
 
 **Status.** Read from the Deployment named after the session. `state` is `Failed` when a container waits with `ImagePullBackOff`, `ErrImagePull`, `CrashLoopBackOff` or a container config error; `reason` says which. The frontend shows that as `ERROR`.
 
@@ -441,10 +438,10 @@ Nothing is kept in memory (the answer is cached about 2 s, and cleared when a se
 
 ### Sites without the gateway
 
-A site may run without the gateway, e.g. one that only offers desktop tools: leave `OPENVRE_GATEWAY_TOKEN` empty (Helm chart: `gateway.enabled: false`). Then:
+A site may run without the gateway, e.g. one that only runs batch tools: leave `OPENVRE_GATEWAY_TOKEN` empty (Helm chart: `gateway.enabled: false`). Then:
 
-- Desktop sessions (Guacamole) and batch Jobs work as usual; they never use the gateway.
-- A request for a web session (`access.type: web`) is refused with 409 "web tools are not enabled on this site (no gateway); desktop tools work", before anything is created.
+- Batch Jobs work as usual; they never use the gateway.
+- A request for an interactive session is refused with 409 "web tools are not enabled on this site (no gateway)", before anything is created.
 - `GET /gateway/routes` answers 404.
 
 The code is the same on both kinds of site; only this setting differs.

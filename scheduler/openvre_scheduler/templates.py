@@ -63,7 +63,7 @@ SESSION_REFS = {
 # Session parameters with a fixed meaning: the scheduler's building blocks read them.
 # A session template must declare "port"; the others are optional.
 SESSION_RESERVED = {
-    "port": "int",                  # app port: Service, probe, Guacamole connection
+    "port": "int",                  # app port: Service and probe
     "image": "image",
     "cpu": "quantity",              # capped by OPENVRE_MAX_SESSION_CPU
     "memory": "quantity",           # capped by OPENVRE_MAX_SESSION_MEMORY
@@ -83,7 +83,7 @@ SESSION_OBJECT_KINDS = {
     "Deployment": "apps/v1",
     "Service": "v1",
 }
-ACCESS_TYPES = {"web", "guacamole"}
+ACCESS_TYPES = {"web"}
 
 
 class TemplateError(Exception):
@@ -425,10 +425,8 @@ class SessionTemplate(_Base):
         self.access = data["access"]
         if not isinstance(self.access, dict) or self.access.get("type") not in ACCESS_TYPES:
             raise TemplateError(f"{source}: access.type must be one of {sorted(ACCESS_TYPES)}")
-        if set(self.access) - {"type", "protocol"}:
-            raise TemplateError(f"{source}: access only takes 'type' and 'protocol'")
-        if self.access["type"] == "guacamole" and not self.access.get("protocol"):
-            raise TemplateError(f"{source}: access.protocol is required for guacamole (e.g. vnc, rdp)")
+        if set(self.access) - {"type"}:
+            raise TemplateError(f"{source}: access only takes 'type'")
 
         self.objects = data["objects"]
         if not isinstance(self.objects, list) or not self.objects:

@@ -4,7 +4,7 @@ import json
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from helpers import FakeKube, desktop_body, load_templates, session_body, settings
+from helpers import FakeKube, load_templates, session_body, settings
 
 from openvre_scheduler import manifests as mf
 from openvre_scheduler import policy, sessions
@@ -139,24 +139,6 @@ class WebTemplateTests(unittest.TestCase):
         _, objs, _ = render(session_body(), settings(OPENVRE_EXTERNAL_BASE="http://vre.local"))
         headers = json.loads(objs["Service"]["metadata"]["annotations"][mf.GATEWAY_HEADERS_ANNOTATION])
         self.assertEqual(headers["X-Forwarded-Proto"], "http")
-
-
-class DesktopTemplateTests(unittest.TestCase):
-    def test_objects_and_access(self):
-        spec, objs, access = render(desktop_body(), settings())
-        self.assertEqual(list(objs), ["Deployment", "Service"])
-        self.assertEqual(access, {"type": "guacamole", "host": spec.name, "port": 5901, "protocol": "vnc"})
-        self.assertEqual(objs["Service"]["spec"]["ports"][0]["port"], 5901)
-
-    def test_protocol_checked(self):
-        body = desktop_body()
-        body["params"]["protocol"] = "ssh"
-        with self.assertRaises(v.ValidationError):
-            parse(body, settings())
-
-    def test_no_gateway_route(self):
-        _, objs, _ = render(desktop_body(), settings())
-        self.assertNotIn(mf.GATEWAY_PATH_ANNOTATION, objs["Service"]["metadata"].get("annotations") or {})
 
 
 class SessionPolicyTests(unittest.TestCase):
@@ -320,9 +302,9 @@ class CreateDeleteTests(unittest.TestCase):
         self.assertEqual(sessions.delete(self.kube, self.s, "openvre", spec.name), (True, []))
         self.assertEqual(self.kube.objects, {})
 
-    def test_delete_desktop_without_configmap_or_ingress_rights(self):
-        """EUCAIM's Role: no ConfigMaps or Ingresses. Desktop sessions still stop."""
-        spec = self.create(desktop_body())
+    def test_delete_without_configmap_or_ingress_rights(self):
+        """EUCAIM's Role: no ConfigMaps or Ingresses. Sessions still stop."""
+        spec = self.create()
         dep = self.kube.objects[f"{DEP_PATH}/{spec.name}"]
         self.assertEqual(dep["metadata"]["annotations"][mf.KINDS_ANNOTATION], "Deployment,Service")
         self.kube.forbidden = ("/configmaps", "/ingresses")

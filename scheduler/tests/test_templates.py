@@ -284,8 +284,10 @@ class SessionTemplateLoadTests(unittest.TestCase):
     def test_access(self):
         with self.assertRaisesRegex(templates.TemplateError, "access.type"):
             session_tpl(lambda d: d.update(access={"type": "ssh"}))
-        with self.assertRaisesRegex(templates.TemplateError, "protocol is required"):
+        with self.assertRaisesRegex(templates.TemplateError, "access.type"):
             session_tpl(lambda d: d.update(access={"type": "guacamole"}))
+        with self.assertRaisesRegex(templates.TemplateError, "only takes 'type'"):
+            session_tpl(lambda d: d.update(access={"type": "web", "protocol": "vnc"}))
 
     def test_none_value_drops_key(self):
         out = templates.fill({"a": "{{ x }}", "b": 1, "l": ["{{ x }}", 2]}, lambda ref: None)
@@ -296,7 +298,6 @@ class SessionTemplateLoadTests(unittest.TestCase):
         web = tpls["openvre-web-session"].describe()
         self.assertEqual(web["objects"], ["Deployment", "Service"])
         self.assertEqual(web["access"], {"type": "web"})
-        self.assertEqual(tpls["openvre-desktop-session"].describe()["access"], {"type": "guacamole"})
 
 
 if __name__ == "__main__":

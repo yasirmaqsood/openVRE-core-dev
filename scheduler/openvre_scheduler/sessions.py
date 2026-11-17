@@ -45,7 +45,7 @@ def parse_request(body, settings, templates):
     # Web sessions are reached only through the gateway. Without one, nothing would
     # route to them, so refuse instead of starting a session nobody can open.
     v.require(tpl.access["type"] != "web" or settings.gateway_token,
-              "web tools are not enabled on this site (no gateway); desktop tools work", 409)
+              "web tools are not enabled on this site (no gateway)", 409)
 
     ctx = body.get("context") or {}
     v.require(isinstance(ctx, dict), "context must be a JSON object")
@@ -124,12 +124,7 @@ def build(tpl, spec, values, settings):
     for obj in objects:
         if obj["kind"] == "Deployment" and obj["metadata"]["name"] == spec.name:
             obj["metadata"].setdefault("annotations", {})[mf.KINDS_ANNOTATION] = kinds
-    if access["type"] == "guacamole":
-        access = {"type": "guacamole", "host": spec.name, "port": spec.port,
-                  "protocol": str(access.get("protocol", "vnc"))}
-    else:
-        access = {"type": "web", "url": spec.path_prefix + "/"}
-    return objects, access
+    return objects, {"type": "web", "url": spec.path_prefix + "/"}
 
 
 def count_user_sessions(kube, spec):
@@ -206,7 +201,7 @@ def status(kube, ns, name):
 def _session_objects(kube, ns, name):
     """(kind, name) -> object for every object of a session: the kinds recorded on
     its Deployment, found by the session label. Only those kinds are looked up,
-    so stopping a desktop session needs no rights on ConfigMaps. The Deployment
+    so stopping a session needs no rights on kinds it does not use. The Deployment
     is deleted last, so an interrupted stop can be retried."""
     dep = kube.get(_object_path("Deployment", ns, name))
     if dep is None:

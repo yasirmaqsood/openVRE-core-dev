@@ -284,8 +284,7 @@ class Handler(BaseHTTPRequestHandler):
                 "name": spec.name,
                 "session_id": spec.session_id,
                 "template": spec.template,
-                # How to reach the session: {"type": "web", "url"} or
-                # {"type": "guacamole", "host", "port", "protocol"}.
+                # How to reach the session: {"type": "web", "url"}.
                 "access": spec.access,
                 "path_prefix": spec.path_prefix,
                 "audit_host_path": spec.audit_host_path,

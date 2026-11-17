@@ -48,7 +48,7 @@ class Settings:
     listen_port: int = 8080
     auth_tokens: list = field(default_factory=list)
     # Read-only token the gateway (Traefik) sends to GET /gateway/routes.
-    # Empty: no gateway on this site; web sessions are refused, desktops and Jobs work.
+    # Empty: no gateway on this site; web sessions are refused, batch Jobs work.
     gateway_token: str = ""
     # User check: "off", "optional" (verify when sent) or "required".
     user_token: str = "off"
